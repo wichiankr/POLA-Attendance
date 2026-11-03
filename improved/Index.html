@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="th"><head><base target="_top"><meta charset="utf-8">
+<style>
+:root{--bg:#f3f6fa;--card:#fff;--ink:#172337;--muted:#66758a;--soft:#f6f8fb;--line:#edf0f5;--brand:#244c94;--brand-ink:#fff;--brand-soft:#e8eef8;
+--ok:#0c7545;--ok-bg:#def7e9;--info:#244b9a;--info-bg:#e8efff;--warn:#9a5b00;--warn-bg:#fff2d6;--err:#b42318;--err-bg:#fdecea;--danger:#c2410c;
+font-family:Inter,"Noto Sans Thai",Sarabun,Arial,sans-serif;color:var(--ink);background:var(--bg)}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1520;--card:#18202d;--ink:#e6ebf2;--muted:#9aa7ba;--soft:#212b3a;--line:#283244;--brand:#4f7fd6;--brand-soft:#243552;
+--ok:#5fd59a;--ok-bg:#163a2a;--info:#9bb8ff;--info-bg:#1f2d4d;--warn:#f3c26b;--warn-bg:#3d2f12;--err:#ff8a7a;--err-bg:#3d1c1a;--danger:#ea7a43}}
+*{box-sizing:border-box}body{margin:0;padding:24px 16px;background:var(--bg)}.app{max-width:640px;margin:auto}
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.brand{font-size:12px;letter-spacing:2px;font-weight:800;color:var(--brand)}h1{font-size:26px;letter-spacing:-.5px;margin:4px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{font-size:12px;padding:4px 10px;border-radius:20px;background:var(--card);color:var(--muted);border:1px solid var(--line)}
+.chip.skeleton{width:150px;height:24px;background:var(--soft);border:0;animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.5}}
+.card{background:var(--card);border-radius:18px;padding:22px;margin:14px 0;box-shadow:0 3px 20px #1022480d}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.pill{border-radius:20px;padding:5px 11px;background:var(--brand-soft);color:var(--brand);font-size:12px;font-weight:700;white-space:nowrap}
+.pill.WORKING{background:var(--ok-bg);color:var(--ok)}.pill.COMPLETED{background:var(--info-bg);color:var(--info)}.pill.MISSED_OUT{background:var(--warn-bg);color:var(--warn)}
+.clock{font-size:52px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-1px;margin:14px 0 0;line-height:1.1}
+.small{font-size:13px;color:var(--muted)}
+.times{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:18px 0}
+.times div{background:var(--soft);border-radius:12px;padding:14px}.times strong{display:block;font-size:20px;margin-top:6px;font-variant-numeric:tabular-nums}
+button{font:inherit;border:0;border-radius:14px;cursor:pointer}
+.primary{width:100%;min-height:58px;padding:16px;font-size:17px;font-weight:800;background:var(--brand);color:var(--brand-ink);transition:background .15s,transform .05s}
+.primary:active{transform:scale(.99)}.primary.out{background:var(--ok)}.primary.confirm{background:var(--danger)}
+.primary:disabled{background:var(--soft);color:var(--muted);cursor:not-allowed}
+button:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.notice{margin-top:12px;padding:10px 12px;border-radius:10px;font-size:14px;display:none;white-space:pre-wrap}
+.notice.show{display:block}.notice.good{background:var(--ok-bg);color:var(--ok)}.notice.error{background:var(--err-bg);color:var(--err)}.notice.info{background:var(--soft);color:var(--muted)}
+.link{background:none;color:inherit;text-decoration:underline;padding:0 0 0 6px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}th{text-align:left;color:var(--muted);font-weight:600;font-size:12px}
+th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numeric:tabular-nums}tr:last-child td{border-bottom:0}
+.scroll{overflow-x:auto}footer{text-align:center;font-size:12px;color:var(--muted);margin-top:18px}
+@media (max-width:420px){.clock{font-size:42px}.times{grid-template-columns:1fr 1fr}.times .dur{grid-column:span 2}th:nth-child(4),td:nth-child(4){display:none}}
+</style></head><body><main class="app">
+<header><div><div class="brand">POLA THAILAND</div><h1 id="greet">WFH Attendance</h1>
+<div class="chips" id="identity"><span class="chip skeleton"></span></div></div></header>
+
+<section class="card" aria-labelledby="todayTitle">
+  <div class="row"><b id="todayTitle">ลงเวลาทำงานวันนี้</b><span id="status" class="pill">กำลังโหลด…</span></div>
+  <div id="clock" class="clock" aria-live="off">--:--:--</div>
+  <div class="small" id="today">&nbsp;</div>
+  <div class="times">
+    <div><span class="small">เข้างาน</span><strong id="clockIn">--:--</strong></div>
+    <div><span class="small">ออกงาน</span><strong id="clockOut">--:--</strong></div>
+    <div class="dur"><span class="small">ระยะเวลา</span><strong id="duration">–</strong></div>
+  </div>
+  <button id="action" class="primary" disabled>กำลังโหลด…</button>
+  <div id="notice" class="notice" role="status" aria-live="polite"></div>
+</section>
+
+<section class="card" aria-labelledby="histTitle"><b id="histTitle">ประวัติ 10 รายการล่าสุด</b>
+<div class="scroll"><table><thead><tr><th>วันที่</th><th>เข้า</th><th>ออก</th><th>ชั่วโมง</th><th>สถานะ</th></tr></thead>
+<tbody id="history"><tr><td colspan="5" class="small">กำลังโหลด…</td></tr></tbody></table></div></section>
+<footer>เวลาอ้างอิงจากเซิร์ฟเวอร์ (Asia/Bangkok) ไม่ใช่นาฬิกาของอุปกรณ์</footer>
+</main>
+<script>
+const TZ='Asia/Bangkok';
+const LABELS={NOT_STARTED:'ยังไม่ลงเวลา',WORKING:'กำลังทำงาน',COMPLETED:'ลงเวลาครบแล้ว',MISSED_OUT:'ไม่ได้ลงเวลาออก',UNKNOWN:'-'};
+let model=null,busy=true,offset=0,confirmTimer=null,lastLoad=0;
+const $=id=>document.getElementById(id);
+const timeOnly=x=>x?x.slice(11,16):'--:--';
+const fmtTime=new Intl.DateTimeFormat('th-TH',{timeZone:TZ,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const fmtLong=new Intl.DateTimeFormat('th-TH',{timeZone:TZ,weekday:'long',day:'numeric',month:'long',year:'numeric'});
+const fmtShort=new Intl.DateTimeFormat('th-TH',{timeZone:TZ,day:'numeric',month:'short'});
+const dateOf=key=>new Date(key+'T12:00:00+07:00');
+const serverNow=()=>Date.now()+offset;
+function el(tag,text,cls){const e=document.createElement(tag);if(text!=null)e.textContent=text;if(cls)e.className=cls;return e}
+function dur(ms){if(ms<0)ms=0;const m=Math.floor(ms/6e4);return Math.floor(m/60)+' ชม. '+String(m%60).padStart(2,'0')+' น.'}
+
+function notice(kind,text,retry){const n=$('notice');n.className='notice show '+kind;n.replaceChildren(el('span',text));
+  if(retry){const b=el('button','ลองใหม่','link');b.onclick=load;n.appendChild(b)}}
+function clearNotice(){$('notice').className='notice';$('notice').replaceChildren()}
+function cleanMsg(e){return String((e&&e.message)||e).replace(/^(Exception|Error):\s*/,'')}
+
+function resetConfirm(){clearTimeout(confirmTimer);confirmTimer=null;updateButton()}
+function updateButton(){const b=$('action');b.className='primary';
+  if(!model){b.disabled=true;b.textContent=busy?'กำลังโหลด…':'ไม่สามารถใช้งานได้';return}
+  b.disabled=busy;
+  if(busy){b.textContent='กำลังบันทึก…';return}
+  if(model.status==='NOT_STARTED'){b.textContent='ลงเวลาเข้างาน (Clock In)'}
+  else if(model.status==='WORKING'){b.classList.add(confirmTimer?'confirm':'out');b.textContent=confirmTimer?'แตะอีกครั้งเพื่อยืนยันออกงาน':'ลงเวลาออกงาน (Clock Out)'}
+  else{b.disabled=true;b.textContent='วันนี้ลงเวลาครบแล้ว ✓'}}
+
+$('action').onclick=()=>{if(busy||!model)return;
+  if(model.status==='NOT_STARTED')return submitClock('IN');
+  if(model.status==='WORKING'){
+    if(!confirmTimer){confirmTimer=setTimeout(resetConfirm,4000);updateButton();return}
+    resetConfirm();submitClock('OUT')}};
+
+function render(data,msg){model=data;busy=false;lastLoad=Date.now();offset=data.serverEpoch-Date.now();
+  const u=data.user;$('greet').textContent='สวัสดี, '+(u.name||u.email);
+  $('identity').replaceChildren(el('span','รหัส '+u.employeeId,'chip'),el('span',u.department||'-','chip'),el('span',u.email,'chip'));
+  $('today').textContent=fmtLong.format(dateOf(data.today));
+  $('clockIn').textContent=timeOnly(data.clockIn);$('clockOut').textContent=timeOnly(data.clockOut);
+  $('status').textContent=LABELS[data.status]||data.status;$('status').className='pill '+data.status;
+  if(data.status==='WORKING'&&data.workDate!==data.today)$('status').textContent+=' (กะจาก '+fmtShort.format(dateOf(data.workDate))+')';
+  renderHistory(data.history);tick();
+  if(msg)notice('good',msg);else clearNotice();
+  updateButton()}
+
+function renderHistory(list){const tb=$('history');tb.replaceChildren();
+  if(!list.length){const tr=el('tr'),td=el('td','ยังไม่มีข้อมูล','small');td.colSpan=5;tr.appendChild(td);tb.appendChild(tr);return}
+  for(const r of list){const tr=el('tr');
+    tr.append(el('td',r.date?fmtShort.format(dateOf(r.date)):'-'),el('td',timeOnly(r.clockIn)),el('td',timeOnly(r.clockOut)),
+      el('td',r.hours!=null?r.hours.toFixed(2):'-'));
+    const td=el('td');td.appendChild(el('span',LABELS[r.status]||r.status,'pill '+r.status));tr.appendChild(td);tb.appendChild(tr)}}
+
+function tick(){const now=serverNow();$('clock').textContent=fmtTime.format(new Date(now));
+  if(!model||!model.clockInEpoch){$('duration').textContent='–';return}
+  const end=model.status==='WORKING'?now:(model.clockOut?new Date(model.clockOut.replace(' ','T')+'+07:00').getTime():now);
+  $('duration').textContent=dur(end-model.clockInEpoch)}
+
+function fail(e){busy=false;notice('error',cleanMsg(e),!model);updateButton()}
+function load(){if(busy&&model)return;busy=true;clearNotice();updateButton();
+  google.script.run.withSuccessHandler(d=>render(d)).withFailureHandler(fail).getDashboard()}
+function submitClock(action){if(busy||!model)return;busy=true;updateButton();notice('info','กำลังบันทึกเวลา…');
+  google.script.run.withSuccessHandler(d=>render(d,(action==='IN'?'ลงเวลาเข้างานเรียบร้อย ':'ลงเวลาออกงานเรียบร้อย ')+timeOnly(action==='IN'?d.clockIn:d.clockOut)+' น.'))
+    // On failure, re-sync with the server (e.g. clocked in from another device) but keep the error visible.
+    .withFailureHandler(e=>{fail(e);google.script.run.withSuccessHandler(d=>{render(d);notice('error',cleanMsg(e))}).getDashboard()}).clock(action)}
+
+setInterval(()=>{tick();
+  // Refresh when the day changes or every 5 minutes so a tab left open never shows a stale status.
+  if(model&&!busy&&(Date.now()-lastLoad>5*6e4||new Intl.DateTimeFormat('en-CA',{timeZone:TZ}).format(new Date(serverNow()))!==model.today))load()},1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&model&&!busy&&Date.now()-lastLoad>30e3)load()});
+busy=false;load();
+</script></body></html>
