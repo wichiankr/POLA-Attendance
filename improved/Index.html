@@ -15,7 +15,7 @@ header{display:flex;align-items:flex-start;justify-content:space-between;gap:12p
 .card{background:var(--card);border-radius:18px;padding:22px;margin:14px 0;box-shadow:0 3px 20px #1022480d}
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .pill{border-radius:20px;padding:5px 11px;background:var(--brand-soft);color:var(--brand);font-size:12px;font-weight:700;white-space:nowrap}
-.pill.WORKING{background:var(--ok-bg);color:var(--ok)}.pill.COMPLETED,.pill.OFF_DUTY{background:var(--info-bg);color:var(--info)}.pill.MISSED_OUT{background:var(--warn-bg);color:var(--warn)}
+.pill.WORKING,.pill.IN{background:var(--ok-bg);color:var(--ok)}.pill.COMPLETED,.pill.DONE{background:var(--info-bg);color:var(--info)}.pill.MISSED_OUT{background:var(--warn-bg);color:var(--warn)}
 .clock{font-size:52px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-1px;margin:14px 0 0;line-height:1.1}
 .small{font-size:13px;color:var(--muted)}
 .times{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:18px 0}
@@ -31,6 +31,7 @@ button:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
 table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}th{text-align:left;color:var(--muted);font-weight:600;font-size:12px}
 th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numeric:tabular-nums}tr:last-child td{border-bottom:0}
 .loc{margin-top:12px;font-size:13px;color:var(--muted);line-height:1.6}.loc a{color:var(--brand);font-weight:600}.here{margin:16px 0 4px;padding:14px;border-radius:12px;background:var(--soft)}.here-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.here-head .link{padding:0;text-decoration:none;color:var(--brand)}.here-place{margin-top:8px;font-weight:600;font-size:15px;line-height:1.45}.here-place.muted{color:var(--muted);font-weight:400}.here-err{margin-top:8px;color:var(--err);font-size:14px}.here-warn{margin-top:2px;color:var(--warn);font-size:13px}.here .small{margin-top:2px}.here-map{display:block;width:100%;height:170px;border:0;border-radius:10px;margin-top:10px;background:var(--line)}
+.hint{margin-top:8px;font-size:13px;color:var(--muted);text-align:center}.punches{margin-top:12px;font-size:13px;color:var(--muted);line-height:1.6}.punches b{color:var(--ink);font-weight:600}
 .privacy{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
 .scroll{overflow-x:auto}footer{text-align:center;font-size:12px;color:var(--muted);margin-top:18px}
 @media (max-width:420px){.clock{font-size:42px}.times{grid-template-columns:1fr 1fr}.times .dur{grid-column:span 2}th:nth-child(4),td:nth-child(4){display:none}}
@@ -45,11 +46,12 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
   <div class="times">
     <div><span class="small">เข้างาน</span><strong id="clockIn">--:--</strong></div>
     <div><span class="small">ออกงาน</span><strong id="clockOut">--:--</strong></div>
-    <div class="dur"><span class="small" id="durLabel">รวมวันนี้</span><strong id="duration">–</strong></div>
+    <div class="dur"><span class="small" id="durLabel">ชั่วโมงทำงาน</span><strong id="duration">–</strong></div>
   </div>
   <div id="here" class="here" aria-live="polite" hidden></div>
   <div id="loc" class="loc"></div>
   <button id="action" class="primary" disabled>กำลังโหลด…</button>
+  <div id="hint" class="hint" hidden>กดครั้งล่าสุดของวันจะนับเป็นเวลาออกงาน</div>
   <div class="privacy">📍 ระบบบันทึกตำแหน่งเฉพาะตอนกดลงเวลาเท่านั้น ไม่มีการติดตามตลอดเวลา</div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
 </section>
@@ -61,7 +63,7 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 </main>
 <script>
 const TZ='Asia/Bangkok';
-const LABELS={NOT_STARTED:'ยังไม่ลงเวลา',WORKING:'กำลังทำงาน',OFF_DUTY:'ออกงานแล้ว',COMPLETED:'เสร็จสิ้น',MISSED_OUT:'ไม่ได้ลงเวลาออก',UNKNOWN:'-'};
+const LABELS={NOT_STARTED:'ยังไม่ลงเวลา',IN:'เข้างานแล้ว',DONE:'ลงเวลาออกแล้ว',WORKING:'กำลังทำงาน',COMPLETED:'ครบ',MISSED_OUT:'ไม่ได้ลงเวลาออก',UNKNOWN:'-'};
 let model=null,busy=true,offset=0,confirmTimer=null,lastLoad=0;
 const $=id=>document.getElementById(id);
 const timeOnly=x=>x?x.slice(11,16):'--:--';
@@ -119,9 +121,11 @@ function renderHere(){const box=$('here');box.replaceChildren();
     f.loading='lazy';f.referrerPolicy='no-referrer';f.src=src;here.mapEl=f;here.mapSrc=src}
   box.append(here.mapEl)}
 function syncHere(){$('here').hidden=false;if(!freshPos()&&!here.busy)locateNow();else renderHere()}
-function renderLoc(data){const box=$('loc');box.replaceChildren();
-  if(data.clockIn)box.append(locLine('📍 เข้างาน',data.inLocation));
-  if(data.clockOut)box.append(locLine('📍 ออกงาน',data.outLocation))}
+function renderLoc(data){const box=$('loc');box.replaceChildren();const list=data.punchesToday||[];
+  if(!list.length)return;
+  const wrap=el('div',null,'punches');wrap.append(el('b','ลงเวลาวันนี้ ('+list.length+' ครั้ง)'));
+  list.forEach((p,i)=>wrap.append(locLine(timeOnly(p.time)+(i===0?' เข้า':i===list.length-1?' ออก':''),p.location)));
+  box.append(wrap)}
 
 function notice(kind,text,retry){const n=$('notice');n.className='notice show '+kind;n.replaceChildren(el('span',text));
   if(retry){const b=el('button','ลองใหม่','link');b.onclick=load;n.appendChild(b)}}
@@ -135,14 +139,16 @@ function updateButton(){const b=$('action');b.className='primary';
   if(busy){b.textContent='กำลังบันทึก…';return}
   if(model.locationRequired&&!here.pos){b.disabled=true;b.textContent=here.busy?'กำลังหาตำแหน่ง…':'เปิดตำแหน่งก่อนลงเวลา';return}
   // Any number of sessions per day: whenever not working, the next action is another Clock In.
-  if(model.status==='WORKING'){b.classList.add(confirmTimer?'confirm':'out');b.textContent=confirmTimer?'แตะอีกครั้งเพื่อยืนยันออกงาน':'ลงเวลาออกงาน (Clock Out)'}
-  else{b.textContent=model.status==='OFF_DUTY'?'ลงเวลาเข้างานอีกครั้ง (Clock In)':'ลงเวลาเข้างาน (Clock In)'}}
+  $('hint').hidden=model.status==='NOT_STARTED';
+  if(model.status==='NOT_STARTED'){b.textContent='ลงเวลาเข้างาน'}
+  else{b.classList.add(confirmTimer?'confirm':'out');
+    b.textContent=confirmTimer?'แตะอีกครั้งเพื่อยืนยัน':model.status==='IN'?'ลงเวลาออกงาน':'อัปเดตเวลาออกงาน'}}
 
 $('action').onclick=()=>{if(busy||!model)return;
-  if(model.status!=='WORKING')return submitClock('IN');
-  if(model.status==='WORKING'){
+  if(model.status==='NOT_STARTED')return submitPunch();
+  {
     if(!confirmTimer){confirmTimer=setTimeout(resetConfirm,4000);updateButton();return}
-    resetConfirm();submitClock('OUT')}};
+    resetConfirm();submitPunch()}};
 
 function render(data,msg){model=data;busy=false;lastLoad=Date.now();offset=data.serverEpoch-Date.now();
   const u=data.user;$('greet').textContent='สวัสดี, '+(u.name||u.email);
@@ -150,7 +156,6 @@ function render(data,msg){model=data;busy=false;lastLoad=Date.now();offset=data.
   $('today').textContent=fmtLong.format(dateOf(data.today));
   $('clockIn').textContent=timeOnly(data.clockIn);$('clockOut').textContent=timeOnly(data.clockOut);
   $('status').textContent=LABELS[data.status]||data.status;$('status').className='pill '+data.status;
-  if(data.status==='WORKING'&&data.workDate!==data.today)$('status').textContent+=' (กะจาก '+fmtShort.format(dateOf(data.workDate))+')';
   renderHistory(data.history);renderLoc(data);syncHere(data);tick();
   if(msg)notice('good',msg);else clearNotice();
   updateButton()}
@@ -165,24 +170,24 @@ function renderHistory(list){const tb=$('history');tb.replaceChildren();
 function tick(){const now=serverNow();$('clock').textContent=fmtTime.format(new Date(now));
   if(!model)return;
   // Today's total = finished sessions (from the server) + the open session, counted live.
-  const working=model.status==='WORKING'&&model.clockInEpoch,carried=working&&model.workDate!==model.today;
-  let ms=carried?0:(model.todayWorkedMs||0);
-  if(working)ms+=now-model.clockInEpoch;
-  $('durLabel').textContent=carried?'กะปัจจุบัน':'รวมวันนี้'+(model.sessionsToday>1?' ('+model.sessionsToday+' ครั้ง)':'');
-  $('duration').textContent=working||ms>0?dur(ms):'–'}
+  const live=model.status==='IN'&&model.clockInEpoch,span=live?now-model.clockInEpoch:0;
+  const ms=live?Math.max(0,span-(span>model.lunchAfterMs?model.lunchBreakMs:0)):model.workedMs||0;
+  const lunched=live?span>model.lunchAfterMs:model.status==='DONE'&&model.clockOut&&
+    new Date(model.clockOut.replace(' ','T')+'+07:00').getTime()-model.clockInEpoch>model.lunchAfterMs;
+  $('durLabel').textContent='ชั่วโมงทำงาน'+(live?' (นับจากเวลาเข้า)':'')+(lunched?' · หักพัก 1 ชม.':'');
+  $('duration').textContent=model.status==='NOT_STARTED'?'–':dur(ms)}
 
 function fail(e){busy=false;notice('error',cleanMsg(e),!model);updateButton()}
 function load(){if(busy&&model)return;busy=true;clearNotice();updateButton();
   google.script.run.withSuccessHandler(d=>render(d)).withFailureHandler(fail).getDashboard()}
-async function submitClock(action){if(busy||!model)return;busy=true;updateButton();notice('info','📍 กำลังหาตำแหน่ง…');
+async function submitPunch(){if(busy||!model)return;busy=true;updateButton();notice('info','📍 กำลังหาตำแหน่ง…');
   let pos=freshPos();
   if(!pos){pos=await getLocation();setPos(pos);renderHere()}
   if(pos.error&&model.locationRequired){busy=false;notice('error',LOC_ERR[pos.error]+' · ต้องมีตำแหน่งจึงจะลงเวลาได้');updateButton();return}
   notice('info','กำลังบันทึกเวลา…');
-  google.script.run.withSuccessHandler(d=>render(d,(action==='IN'?'ลงเวลาเข้างานเรียบร้อย ':'ลงเวลาออกงานเรียบร้อย ')+timeOnly(action==='IN'?d.clockIn:d.clockOut)+' น.'+
-      (pos.error?' (ไม่ได้บันทึกตำแหน่ง: '+LOC_ERR[pos.error]+')':'')))
-    // On failure, re-sync with the server (e.g. clocked in from another device) but keep the error visible.
-    .withFailureHandler(e=>{fail(e);google.script.run.withSuccessHandler(d=>{render(d);notice('error',cleanMsg(e))}).getDashboard()}).clock(action,pos.error?null:pos)}
+  google.script.run.withSuccessHandler(d=>render(d,(d.punchCount===1?'ลงเวลาเข้างานเรียบร้อย ':'บันทึกเวลาออกงาน ')+timeOnly(d.punchCount===1?d.clockIn:d.clockOut)+' น.'))
+    // On failure, re-sync with the server (e.g. punched from another device) but keep the error visible.
+    .withFailureHandler(e=>{fail(e);google.script.run.withSuccessHandler(d=>{render(d);notice('error',cleanMsg(e))}).getDashboard()}).punch(pos)}
 
 setInterval(()=>{tick();
   // Refresh when the day changes or every 5 minutes so a tab left open never shows a stale status.

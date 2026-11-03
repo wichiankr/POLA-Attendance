@@ -1,5 +1,5 @@
 /**
- * POLA WFH Attendance | Version 1.4 (location tagging)
+ * POLA WFH Attendance | Version 2.0 (punch model: first punch = clock-in, last punch = clock-out)
  * Two ways in:
  *  - Google web app (doGet + google.script.run): identity = same-domain Google Workspace login.
  *  - LINE LIFF (doPost JSON API): identity = LINE ID token verified with LINE, linked to an employee
@@ -8,7 +8,8 @@
 const TZ = 'Asia/Bangkok';
 const TZ_OFFSET = '+07:00'; // Asia/Bangkok has no DST.
 const SHEET_EMP = 'Employees';
-const SHEET_LOG = 'Attendance';
+const SHEET_LOG = 'Attendance'; // v1.x sessions, read-only from v2.0
+const SHEET_PUNCH = 'Punches';
 // Keep the original columns intact. EmployeeId, LineUserId and the location columns are appended.
 const HEAD_EMP = ['Email','FullName','Department','Active','EmployeeId','LineUserId'];
 const HEAD_LOG = ['RecordId','Email','FullName','Department','WorkDate','ClockIn','ClockOut','Status','Notes','EmployeeId',
@@ -16,16 +17,22 @@ const HEAD_LOG = ['RecordId','Email','FullName','Department','WorkDate','ClockIn
 // Column indexes (0-based).
 const E = {EMAIL:0, NAME:1, DEPT:2, ACTIVE:3, EMP_ID:4, LINE:5};
 const L = {ID:0, EMAIL:1, NAME:2, DEPT:3, DATE:4, IN:5, OUT:6, STATUS:7, NOTES:8, EMP_ID:9, IN_LOC:10, OUT_LOC:13};
+// One row per tap. Append-only, so it doubles as the audit log.
+const HEAD_PUNCH = ['PunchId','Email','FullName','Department','WorkDate','PunchTime','EmployeeId','Location','AccuracyM','Place','Source'];
+const P = {ID:0, EMAIL:1, NAME:2, DEPT:3, DATE:4, TIME:5, EMP_ID:6, LOC:7, ACC:8, PLACE:9, SOURCE:10};
 const EMP_ID_RE = /^[0-9]{4}$/;
-// A shift that started yesterday (overnight work) can still be clocked out within this window.
-const MAX_SHIFT_HOURS = 20;
-const HISTORY_SIZE = 10;
+const HISTORY_SIZE = 10; // days
+// Work hours = last punch − first punch, minus LUNCH_BREAK_MIN once the span exceeds LUNCH_AFTER_HOURS.
+const LUNCH_BREAK_MIN = 60;
+const LUNCH_AFTER_HOURS = 5;
+// Taps closer together than this are a double tap, not a new punch.
+const PUNCH_GAP_SEC = 60;
 // LINE account linking.
 const LINK_TTL_SEC = 600;
 const LINK_MAX_TRIES = 5;
 const LINK_RESEND_SEC = 60;
 const REMINDER_HOUR = 19;
-// Location tagging: every clock in/out must carry a GPS fix.
+// Location tagging: every punch must carry a GPS fix.
 const MAX_ACCURACY_M = 100000;
 
 /**
@@ -40,6 +47,8 @@ function setup() {
   if (!id) props.setProperty('SPREADSHEET_ID', ss.getId());
   const emp = initializeSheet_(ss, SHEET_EMP, HEAD_EMP);
   const log = initializeSheet_(ss, SHEET_LOG, HEAD_LOG);
+  const punches = punchSheet_(ss);
+  punches.getRange(2, 1, Math.max(punches.getMaxRows() - 1, 1), HEAD_PUNCH.length).setNumberFormat('@');
   // Store every attendance cell as plain text: keeps leading zeros in EmployeeId, stops Sheets from
   // re-parsing "yyyy-MM-dd" into locale-formatted dates, and neutralises formula injection ("=...").
   log.getRange(2, 1, Math.max(log.getMaxRows() - 1, 1), HEAD_LOG.length).setNumberFormat('@');
@@ -161,11 +170,13 @@ function parseTime_(text) {
  * Normalises one Attendance row. Rows written by v1.0/1.1 via appendRow() may have been auto-converted
  * by Sheets into Date / Number cells, so compare on raw values instead of locale-dependent display text.
  */
+function cell_(v, fmt) { return v instanceof Date ? Utilities.formatDate(v, TZ, fmt) : String(v == null ? '' : v).trim(); }
+// v1.1 appendRow() turned "0097" into 97 (number, or text "97" once the column was reformatted).
+function empIdOf_(raw) { return /^[0-9]{1,3}$/.test(raw) ? raw.padStart(4, '0') : raw; }
+
 function normalizeRow_(r) {
-  const cell = (v, fmt) => v instanceof Date ? Utilities.formatDate(v, TZ, fmt) : String(v == null ? '' : v).trim();
-  // v1.1 appendRow() turned "0097" into 97 (number, or text "97" once the column was reformatted).
-  const rawId = cell(r[L.EMP_ID]);
-  const empId = /^[0-9]{1,3}$/.test(rawId) ? rawId.padStart(4, '0') : rawId;
+  const cell = cell_;
+  const empId = empIdOf_(cell(r[L.EMP_ID]));
   return {
     email: cell(r[L.EMAIL]).toLowerCase(),
     date: cell(r[L.DATE], 'yyyy-MM-dd'),
@@ -183,68 +194,98 @@ function isSameUser_(rec, user) {
   return rec.empId ? rec.empId === user.employeeId : rec.email === user.email;
 }
 
-function isOpen_(rec) { return rec.status === 'WORKING' && !rec.clockOut; }
+/* ---------- Punches: clock-in = earliest punch of the day, clock-out = latest ---------- */
 
-/**
- * One pass over the log: today's sessions (newest first), the shift that can still be clocked out,
- * and recent history. A day can hold any number of IN/OUT sessions.
- */
-function userState_(sh, user, now) {
-  const today = dateKey_(now);
-  const last = sh.getLastRow();
-  const rows = last < 2 ? [] : sh.getRange(2, 1, last - 1, HEAD_LOG.length).getValues();
-  let openRec = null;
-  const mine = [], todayRecs = [];
-  const yesterday = dateKey_(new Date(now - 864e5));
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const rec = normalizeRow_(rows[i]);
-    if (!isSameUser_(rec, user)) continue;
-    rec.row = i + 2;
-    if (mine.length < HISTORY_SIZE) mine.push(rec);
-    if (rec.date === today) todayRecs.push(rec);
-    if (!openRec && isOpen_(rec)) {
-      const start = parseTime_(rec.clockIn);
-      const fresh = rec.date === today || (start && now - start <= MAX_SHIFT_HOURS * 3600e3);
-      if (fresh) openRec = rec;
-    }
-    // Stop scanning once we are past yesterday and already have the history we need.
-    if (mine.length >= HISTORY_SIZE && rec.date < yesterday) break;
+/** The Punches sheet, created on first use so a missed setup() re-run cannot break clocking. */
+function punchSheet_(ss) {
+  let sh = ss.getSheetByName(SHEET_PUNCH);
+  if (!sh) {
+    sh = initializeSheet_(ss, SHEET_PUNCH, HEAD_PUNCH);
+    sh.getRange(2, 1, Math.max(sh.getMaxRows() - 1, 1), HEAD_PUNCH.length).setNumberFormat('@');
   }
-  return {today:today, todayRecs:todayRecs, openRec:openRec, mine:mine};
+  return sh;
 }
 
-function hours_(rec) {
-  const a = parseTime_(rec.clockIn), b = parseTime_(rec.clockOut);
-  return a && b && b > a ? Math.round((b - a) / 36e3) / 100 : null;
+function punchOf_(who, time, loc, acc, place) {
+  const d = parseTime_(time);
+  // Calendar day of the punch itself (00:00–23:59 Bangkok), not the old WorkDate column.
+  return {email:who.email, empId:who.empId, time:time, date:time.slice(0, 10), epoch:d ? d.getTime() : 0,
+    loc:loc, acc:acc, place:place};
+}
+
+/**
+ * Every punch in the spreadsheet: rows of the Punches sheet, plus the ClockIn / ClockOut of each
+ * legacy Attendance row (v1.x sessions), so older history keeps showing.
+ */
+function allPunches_(ss) {
+  const out = [];
+  const log = ss.getSheetByName(SHEET_LOG);
+  if (log && log.getLastRow() > 1) {
+    log.getRange(2, 1, log.getLastRow() - 1, HEAD_LOG.length).getValues().forEach(r => {
+      const rec = normalizeRow_(r);
+      if (rec.clockIn) out.push(punchOf_(rec, rec.clockIn, rec.inLoc, rec.inAcc, rec.inPlace));
+      if (rec.clockOut) out.push(punchOf_(rec, rec.clockOut, rec.outLoc, rec.outAcc, rec.outPlace));
+    });
+  }
+  const ps = ss.getSheetByName(SHEET_PUNCH);
+  if (ps && ps.getLastRow() > 1) {
+    ps.getRange(2, 1, ps.getLastRow() - 1, HEAD_PUNCH.length).getValues().forEach(r => {
+      const who = {email:cell_(r[P.EMAIL]).toLowerCase(), empId:empIdOf_(cell_(r[P.EMP_ID]))};
+      out.push(punchOf_(who, cell_(r[P.TIME], 'yyyy-MM-dd HH:mm:ss'), cell_(r[P.LOC]), cell_(r[P.ACC]), cell_(r[P.PLACE])));
+    });
+  }
+  return out.filter(p => p.epoch);
+}
+
+/** The user's punches grouped by day: {byDate: {date: [punch…] oldest first}, dates: newest first, latest}. */
+function userDays_(ss, user) {
+  const mine = allPunches_(ss).filter(p => isSameUser_(p, user)).sort((a, b) => a.epoch - b.epoch);
+  const byDate = {};
+  mine.forEach(p => (byDate[p.date] = byDate[p.date] || []).push(p));
+  return {byDate:byDate, dates:Object.keys(byDate).sort().reverse(), latest:mine[mine.length - 1] || null};
+}
+
+/** Hours rule: latest − earliest, minus a lunch break once the span is longer than LUNCH_AFTER_HOURS. */
+function workedMs_(spanMs) {
+  return Math.max(0, spanMs - (spanMs > LUNCH_AFTER_HOURS * 3600e3 ? LUNCH_BREAK_MIN * 60e3 : 0));
+}
+
+function daySummary_(punches) {
+  const first = punches[0], last = punches.length > 1 ? punches[punches.length - 1] : null;
+  return {first:first, last:last, count:punches.length, workedMs:last ? workedMs_(last.epoch - first.epoch) : 0};
 }
 
 function dashboard_(ss, user, now) {
-  const st = userState_(ss.getSheetByName(SHEET_LOG), user, now);
-  // Current = the open session, else today's latest one.
-  const current = st.openRec || st.todayRecs[0] || null;
-  const status = st.openRec ? 'WORKING' : st.todayRecs.length ? 'OFF_DUTY' : 'NOT_STARTED';
-  // Finished time today; the client adds the open session's elapsed time live.
-  const todayWorkedMs = st.todayRecs.reduce((sum, r) => sum + (hours_(r) || 0) * 3600e3, 0);
+  const today = dateKey_(now);
+  const days = userDays_(ss, user);
+  const sum = days.byDate[today] ? daySummary_(days.byDate[today]) : null;
+  const status = !sum ? 'NOT_STARTED' : sum.count === 1 ? 'IN' : 'DONE';
+  const view = p => p ? locationView_(p.loc, p.acc, p.place) : null;
   return {
     // Only what the page needs: never send the sheet row or LINE user ID back to the client.
     user: {email:user.email, name:user.name, department:user.department, employeeId:user.employeeId},
-    today: st.today,
+    today: today,
     serverEpoch: now.getTime(),
     status: status,
-    workDate: current ? current.date : st.today,
-    clockIn: current ? current.clockIn : '',
-    clockOut: current ? current.clockOut : '',
-    clockInEpoch: current && parseTime_(current.clockIn) ? parseTime_(current.clockIn).getTime() : null,
-    todayWorkedMs: Math.round(todayWorkedMs),
-    sessionsToday: st.todayRecs.length,
+    clockIn: sum ? sum.first.time : '',
+    clockOut: sum && sum.last ? sum.last.time : '',
+    clockInEpoch: sum ? sum.first.epoch : null,
+    workedMs: sum ? sum.workedMs : 0,
+    punchCount: sum ? sum.count : 0,
+    // Lets the page count hours live after the first punch with the same lunch rule.
+    lunchBreakMs: LUNCH_BREAK_MIN * 60e3,
+    lunchAfterMs: LUNCH_AFTER_HOURS * 3600e3,
     locationRequired: true,
-    inLocation: current ? locationView_(current.inLoc, current.inAcc, current.inPlace) : null,
-    outLocation: current ? locationView_(current.outLoc, current.outAcc, current.outPlace) : null,
-    history: st.mine.map(r => ({
-      date: r.date, clockIn: r.clockIn, clockOut: r.clockOut, hours: hours_(r),
-      // An open shift that is no longer the current one was never clocked out.
-      status: isOpen_(r) && (!st.openRec || st.openRec.row !== r.row) ? 'MISSED_OUT' : r.status || 'UNKNOWN'
-    }))
+    inLocation: sum ? view(sum.first) : null,
+    outLocation: sum ? view(sum.last) : null,
+    punchesToday: (days.byDate[today] || []).map(p => ({time:p.time, location:view(p)})),
+    history: days.dates.slice(0, HISTORY_SIZE).map(date => {
+      const s = daySummary_(days.byDate[date]);
+      return {date:date, clockIn:s.first.time, clockOut:s.last ? s.last.time : '', punches:s.count,
+        hours:s.last ? Math.round(s.workedMs / 36e3) / 100 : null,
+        // A finished day with a single punch never got a clock-out.
+        status:s.last ? 'COMPLETED' : date === today ? 'IN' : 'MISSED_OUT'};
+    })
   };
 }
 
@@ -254,32 +295,24 @@ function lock_() {
   return lock;
 }
 
-function clockFor_(ss, user, action, location) {
-  if (action !== 'IN' && action !== 'OUT') throw fail_('RULE', 'คำสั่งไม่ถูกต้อง');
-  // Location is mandatory for every clock in and out.
+/** Records one punch. Location is mandatory; a second tap within PUNCH_GAP_SEC is treated as a double tap. */
+function punchFor_(ss, user, location, source) {
   const loc = parseLocation_(location);
   if (!loc) throw fail_('LOCATION', 'ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนลงเวลา กรุณาเปิด Location แล้วลองใหม่');
   // Reverse geocoding is a network call: do it before taking the lock.
-  const tag = [loc.lat.toFixed(6) + ',' + loc.lng.toFixed(6), String(loc.acc), placeName_(loc)];
+  const place = placeName_(loc);
   const lock = lock_();
   try {
-    const sh = ss.getSheetByName(SHEET_LOG);
     const now = new Date();
-    const st = userState_(sh, user, now);
-    if (action === 'IN') {
-      // Unlimited sessions per day; only one can be open at a time.
-      if (st.openRec) throw fail_('RULE', 'คุณกำลังอยู่ในเวลางาน (เข้างานเมื่อ ' + st.openRec.clockIn.slice(11, 16) + ' น.) กรุณาลงเวลาออกก่อน');
-      const values = [Utilities.getUuid(), user.email, user.name, user.department, st.today,
-        timeText_(now), '', 'WORKING', '', user.employeeId].concat(tag, ['', '', '']);
-      // Explicit text-formatted write instead of appendRow(), so Sheets cannot re-type the values.
-      sh.getRange(sh.getLastRow() + 1, 1, 1, values.length).setNumberFormat('@').setValues([values]);
-    } else {
-      if (!st.openRec) throw fail_('RULE', 'คุณยังไม่ได้ลงเวลาเข้างาน กรุณาลงเวลาเข้าก่อน');
-      sh.getRange(st.openRec.row, L.OUT + 1, 1, 2).setNumberFormat('@').setValues([[timeText_(now), 'COMPLETED']]);
-      sh.getRange(st.openRec.row, L.OUT_LOC + 1, 1, 3).setNumberFormat('@').setValues([tag]);
-      // Backfill EmployeeId when clocking out of a record created by version 1.0.
-      if (!st.openRec.empId) sh.getRange(st.openRec.row, L.EMP_ID + 1).setNumberFormat('@').setValue(user.employeeId);
+    const latest = userDays_(ss, user).latest;
+    if (latest && now - latest.epoch < PUNCH_GAP_SEC * 1000) {
+      throw fail_('DUPLICATE', 'เพิ่งลงเวลาไปเมื่อ ' + latest.time.slice(11, 16) + ' น. กรุณารอ 1 นาทีก่อนกดอีกครั้ง');
     }
+    const values = [Utilities.getUuid(), user.email, user.name, user.department, dateKey_(now), timeText_(now),
+      user.employeeId, loc.lat.toFixed(6) + ',' + loc.lng.toFixed(6), String(loc.acc), place, source];
+    const sh = punchSheet_(ss);
+    // Explicit text-formatted write instead of appendRow(), so Sheets cannot re-type the values.
+    sh.getRange(sh.getLastRow() + 1, 1, 1, values.length).setNumberFormat('@').setValues([values]);
     SpreadsheetApp.flush();
     return dashboard_(ss, user, now);
   } finally {
@@ -347,10 +380,13 @@ function previewPlace(location) {
   return placeView_(location);
 }
 
-function clock(action, location) {
+function punch(location) {
   const ss = getDb_();
-  return clockFor_(ss, employee_(ss), action, location);
+  return punchFor_(ss, employee_(ss), location, 'WEB');
 }
+
+/** v1.x pages called clock('IN'|'OUT', location); both are now just a punch. */
+function clock(action, location) { return punch(location); }
 
 /* ---------- LINE LIFF JSON API ---------- */
 
@@ -369,7 +405,9 @@ function doPost(e) {
     let data;
     switch (req.action) {
       case 'dashboard': data = dashboard_(ss, employeeByLine_(ss, lineUserId), new Date()); break;
-      case 'clock': data = clockFor_(ss, employeeByLine_(ss, lineUserId), req.clockAction, req.location); break;
+      case 'punch':
+      case 'clock': // v1.x LIFF pages still cached on phones
+        data = punchFor_(ss, employeeByLine_(ss, lineUserId), req.location, 'LINE'); break;
       case 'place': employeeByLine_(ss, lineUserId); data = placeView_(req.location); break;
       case 'linkStart': data = linkStart_(ss, lineUserId, req.email); break;
       case 'linkVerify': data = linkVerify_(ss, lineUserId, req.code); break;
@@ -491,7 +529,7 @@ function installReminder() {
   ScriptApp.newTrigger('remindClockOut').timeBased().everyDays(1).atHour(REMINDER_HOUR).inTimezone(TZ).create();
 }
 
-/** Pushes a LINE message to every linked employee who is still clocked in. */
+/** Pushes a LINE message to every linked employee whose only punch today is the clock-in. */
 function remindClockOut(e) {
   // Public function, so google.script.run could call it: only allow our own trigger or the owner.
   const fromTrigger = e && e.triggerUid && ScriptApp.getProjectTriggers().some(t => t.getUniqueId() === String(e.triggerUid));
@@ -504,19 +542,16 @@ function remindClockOut(e) {
     if (isActive_(r[E.ACTIVE]) && r[E.LINE]) lineById[String(r[E.EMP_ID]).trim()] = String(r[E.LINE]).trim();
   });
   const today = dateKey_(new Date());
-  const sh = ss.getSheetByName(SHEET_LOG);
-  const last = sh.getLastRow();
-  if (last < 2) return;
-  const sent = {};
-  sh.getRange(2, 1, last - 1, HEAD_LOG.length).getValues().map(normalizeRow_).forEach(rec => {
-    const to = lineById[rec.empId];
-    if (!to || sent[to] || rec.date !== today || !isOpen_(rec)) return;
-    sent[to] = true;
+  const todays = {};
+  allPunches_(ss).filter(p => p.date === today && p.empId).forEach(p => (todays[p.empId] = todays[p.empId] || []).push(p));
+  Object.keys(todays).forEach(empId => {
+    const to = lineById[empId];
+    if (!to || todays[empId].length !== 1) return;
     UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
       method: 'post', contentType: 'application/json', muteHttpExceptions: true,
       headers: {Authorization: 'Bearer ' + token},
       payload: JSON.stringify({to:to, messages:[{type:'text',
-        text:'⏰ คุณยังไม่ได้ลงเวลาออกงานวันนี้ (เข้างาน ' + rec.clockIn.slice(11, 16) + ' น.) อย่าลืมกด Clock Out นะครับ'}]})
+        text:'⏰ วันนี้คุณลงเวลาเข้างานไว้ ' + todays[empId][0].time.slice(11, 16) + ' น. แต่ยังไม่ได้ลงเวลาออก อย่าลืมกดลงเวลาออกงานนะครับ'}]})
     });
   });
 }
