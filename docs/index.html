@@ -3,6 +3,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <title>POLA | WFH Attendance</title>
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+<link rel="apple-touch-icon" href="icon-180.png">
 <style>
 :root{--bg:#f3f6fa;--card:#fff;--ink:#172337;--muted:#66758a;--soft:#f6f8fb;--line:#edf0f5;--brand:#244c94;--brand-ink:#fff;--brand-soft:#e8eef8;
 --ok:#0c7545;--ok-bg:#def7e9;--info:#244b9a;--info-bg:#e8efff;--warn:#9a5b00;--warn-bg:#fff2d6;--err:#b42318;--err-bg:#fdecea;--danger:#c2410c;
@@ -130,7 +133,7 @@ function handleAuth(e){
 function bootError(msg){show('boot');$('bootSpin').hidden=true;$('bootMsg').textContent=msg;$('bootRetry').hidden=false}
 $('bootRetry').onclick=()=>location.reload();
 async function boot(){
-  if(!CFG.LIFF_ID||CFG.LIFF_ID.startsWith('YOUR-')){bootError('ยังไม่ได้ตั้งค่า LIFF_ID / API_URL ใน config.js');return}
+  if(!CFG.LIFF_ID||CFG.LIFF_ID.startsWith('YOUR-')||!CFG.API_URL||CFG.API_URL.includes('YOUR-')){bootError('ระบบยังตั้งค่าไม่ครบ (LIFF_ID / API_URL ใน config.js) กรุณาติดต่อผู้ดูแล');return}
   try{await liff.init({liffId:CFG.LIFF_ID})}catch(e){bootError('เปิด LINE LIFF ไม่สำเร็จ: '+(e.message||e));return}
   if(!liff.isLoggedIn()){liff.login({redirectUri:location.href});return}
   $('bootMsg').textContent='กำลังโหลดข้อมูล…';
