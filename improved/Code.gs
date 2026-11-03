@@ -25,7 +25,7 @@ const LINK_TTL_SEC = 600;
 const LINK_MAX_TRIES = 5;
 const LINK_RESEND_SEC = 60;
 const REMINDER_HOUR = 19;
-// Location tagging. Script property LOCATION_REQUIRED=true blocks clocking without a GPS fix.
+// Location tagging: every clock in/out must carry a GPS fix.
 const MAX_ACCURACY_M = 100000;
 
 /**
@@ -185,20 +185,23 @@ function isSameUser_(rec, user) {
 
 function isOpen_(rec) { return rec.status === 'WORKING' && !rec.clockOut; }
 
-/** One pass over the log: today's record, the shift that can still be clocked out, and recent history. */
+/**
+ * One pass over the log: today's sessions (newest first), the shift that can still be clocked out,
+ * and recent history. A day can hold any number of IN/OUT sessions.
+ */
 function userState_(sh, user, now) {
   const today = dateKey_(now);
   const last = sh.getLastRow();
   const rows = last < 2 ? [] : sh.getRange(2, 1, last - 1, HEAD_LOG.length).getValues();
-  let todayRec = null, openRec = null;
-  const mine = [];
+  let openRec = null;
+  const mine = [], todayRecs = [];
   const yesterday = dateKey_(new Date(now - 864e5));
   for (let i = rows.length - 1; i >= 0; i--) {
     const rec = normalizeRow_(rows[i]);
     if (!isSameUser_(rec, user)) continue;
     rec.row = i + 2;
     if (mine.length < HISTORY_SIZE) mine.push(rec);
-    if (!todayRec && rec.date === today) todayRec = rec;
+    if (rec.date === today) todayRecs.push(rec);
     if (!openRec && isOpen_(rec)) {
       const start = parseTime_(rec.clockIn);
       const fresh = rec.date === today || (start && now - start <= MAX_SHIFT_HOURS * 3600e3);
@@ -207,7 +210,7 @@ function userState_(sh, user, now) {
     // Stop scanning once we are past yesterday and already have the history we need.
     if (mine.length >= HISTORY_SIZE && rec.date < yesterday) break;
   }
-  return {today:today, todayRec:todayRec, openRec:openRec, mine:mine};
+  return {today:today, todayRecs:todayRecs, openRec:openRec, mine:mine};
 }
 
 function hours_(rec) {
@@ -217,8 +220,11 @@ function hours_(rec) {
 
 function dashboard_(ss, user, now) {
   const st = userState_(ss.getSheetByName(SHEET_LOG), user, now);
-  const current = st.openRec || st.todayRec;
-  const status = st.openRec ? 'WORKING' : st.todayRec ? 'COMPLETED' : 'NOT_STARTED';
+  // Current = the open session, else today's latest one.
+  const current = st.openRec || st.todayRecs[0] || null;
+  const status = st.openRec ? 'WORKING' : st.todayRecs.length ? 'OFF_DUTY' : 'NOT_STARTED';
+  // Finished time today; the client adds the open session's elapsed time live.
+  const todayWorkedMs = st.todayRecs.reduce((sum, r) => sum + (hours_(r) || 0) * 3600e3, 0);
   return {
     // Only what the page needs: never send the sheet row or LINE user ID back to the client.
     user: {email:user.email, name:user.name, department:user.department, employeeId:user.employeeId},
@@ -229,7 +235,9 @@ function dashboard_(ss, user, now) {
     clockIn: current ? current.clockIn : '',
     clockOut: current ? current.clockOut : '',
     clockInEpoch: current && parseTime_(current.clockIn) ? parseTime_(current.clockIn).getTime() : null,
-    locationRequired: locationRequired_(),
+    todayWorkedMs: Math.round(todayWorkedMs),
+    sessionsToday: st.todayRecs.length,
+    locationRequired: true,
     inLocation: current ? locationView_(current.inLoc, current.inAcc, current.inPlace) : null,
     outLocation: current ? locationView_(current.outLoc, current.outAcc, current.outPlace) : null,
     history: st.mine.map(r => ({
@@ -248,26 +256,25 @@ function lock_() {
 
 function clockFor_(ss, user, action, location) {
   if (action !== 'IN' && action !== 'OUT') throw fail_('RULE', 'คำสั่งไม่ถูกต้อง');
+  // Location is mandatory for every clock in and out.
   const loc = parseLocation_(location);
-  if (!loc && locationRequired_()) {
-    throw fail_('LOCATION', 'ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนลงเวลา กรุณาเปิด Location แล้วลองใหม่');
-  }
+  if (!loc) throw fail_('LOCATION', 'ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนลงเวลา กรุณาเปิด Location แล้วลองใหม่');
   // Reverse geocoding is a network call: do it before taking the lock.
-  const tag = loc ? [loc.lat.toFixed(6) + ',' + loc.lng.toFixed(6), String(loc.acc), placeName_(loc)] : ['', '', ''];
+  const tag = [loc.lat.toFixed(6) + ',' + loc.lng.toFixed(6), String(loc.acc), placeName_(loc)];
   const lock = lock_();
   try {
     const sh = ss.getSheetByName(SHEET_LOG);
     const now = new Date();
     const st = userState_(sh, user, now);
     if (action === 'IN') {
-      if (st.openRec) throw fail_('RULE', 'คุณยังไม่ได้ลงเวลาออกจากกะที่เริ่มเมื่อ ' + st.openRec.clockIn);
-      if (st.todayRec) throw fail_('RULE', 'วันนี้คุณลงเวลาเข้างานไปแล้ว');
+      // Unlimited sessions per day; only one can be open at a time.
+      if (st.openRec) throw fail_('RULE', 'คุณกำลังอยู่ในเวลางาน (เข้างานเมื่อ ' + st.openRec.clockIn.slice(11, 16) + ' น.) กรุณาลงเวลาออกก่อน');
       const values = [Utilities.getUuid(), user.email, user.name, user.department, st.today,
         timeText_(now), '', 'WORKING', '', user.employeeId].concat(tag, ['', '', '']);
       // Explicit text-formatted write instead of appendRow(), so Sheets cannot re-type the values.
       sh.getRange(sh.getLastRow() + 1, 1, 1, values.length).setNumberFormat('@').setValues([values]);
     } else {
-      if (!st.openRec) throw fail_('RULE', st.todayRec ? 'วันนี้คุณลงเวลาออกงานไปแล้ว' : 'กรุณาลงเวลาเข้างานก่อน');
+      if (!st.openRec) throw fail_('RULE', 'คุณยังไม่ได้ลงเวลาเข้างาน กรุณาลงเวลาเข้าก่อน');
       sh.getRange(st.openRec.row, L.OUT + 1, 1, 2).setNumberFormat('@').setValues([[timeText_(now), 'COMPLETED']]);
       sh.getRange(st.openRec.row, L.OUT_LOC + 1, 1, 3).setNumberFormat('@').setValues([tag]);
       // Backfill EmployeeId when clocking out of a record created by version 1.0.
@@ -281,10 +288,6 @@ function clockFor_(ss, user, action, location) {
 }
 
 /* ---------- Location tagging ---------- */
-
-function locationRequired_() {
-  return String(PropertiesService.getScriptProperties().getProperty('LOCATION_REQUIRED') || '').toLowerCase() === 'true';
-}
 
 /**
  * Validates the browser-reported position. It comes from the client, so it is a strong hint,

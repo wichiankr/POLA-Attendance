@@ -19,7 +19,7 @@ header{margin-bottom:14px}.brand{font-size:12px;letter-spacing:2px;font-weight:8
 .card{background:var(--card);border-radius:18px;padding:22px;margin:14px 0;box-shadow:0 3px 20px #1022480d}
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .pill{border-radius:20px;padding:5px 11px;background:var(--brand-soft);color:var(--brand);font-size:12px;font-weight:700;white-space:nowrap}
-.pill.WORKING{background:var(--ok-bg);color:var(--ok)}.pill.COMPLETED{background:var(--info-bg);color:var(--info)}.pill.MISSED_OUT{background:var(--warn-bg);color:var(--warn)}
+.pill.WORKING{background:var(--ok-bg);color:var(--ok)}.pill.COMPLETED,.pill.OFF_DUTY{background:var(--info-bg);color:var(--info)}.pill.MISSED_OUT{background:var(--warn-bg);color:var(--warn)}
 .clock{font-size:52px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-1px;margin:14px 0 0;line-height:1.1}
 .small{font-size:13px;color:var(--muted)}p{margin:6px 0 14px;color:var(--muted);font-size:14px;line-height:1.5}
 .times{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:18px 0}
@@ -82,7 +82,7 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
   <div class="times">
     <div><span class="small">เข้างาน</span><strong id="clockIn">--:--</strong></div>
     <div><span class="small">ออกงาน</span><strong id="clockOut">--:--</strong></div>
-    <div class="dur"><span class="small">ระยะเวลา</span><strong id="duration">–</strong></div>
+    <div class="dur"><span class="small" id="durLabel">รวมวันนี้</span><strong id="duration">–</strong></div>
   </div>
   <div id="here" class="here" aria-live="polite" hidden></div>
   <div id="loc" class="loc"></div>
@@ -100,7 +100,7 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script>
 const TZ='Asia/Bangkok',CFG=window.APP_CONFIG||{};
-const LABELS={NOT_STARTED:'ยังไม่ลงเวลา',WORKING:'กำลังทำงาน',COMPLETED:'ลงเวลาครบแล้ว',MISSED_OUT:'ไม่ได้ลงเวลาออก',UNKNOWN:'-'};
+const LABELS={NOT_STARTED:'ยังไม่ลงเวลา',WORKING:'กำลังทำงาน',OFF_DUTY:'ออกงานแล้ว',COMPLETED:'เสร็จสิ้น',MISSED_OUT:'ไม่ได้ลงเวลาออก',UNKNOWN:'-'};
 let model=null,busy=false,offset=0,confirmTimer=null,lastLoad=0;
 const $=id=>document.getElementById(id);
 const timeOnly=x=>x?x.slice(11,16):'--:--';
@@ -206,8 +206,7 @@ function renderHere(){const box=$('here');box.replaceChildren();
   if(!here.mapEl||here.mapSrc!==src){const f=el('iframe');f.className='here-map';f.title='แผนที่ตำแหน่งปัจจุบัน';
     f.loading='lazy';f.referrerPolicy='no-referrer';f.src=src;here.mapEl=f;here.mapSrc=src}
   box.append(here.mapEl)}
-function syncHere(data){const show=data.status!=='COMPLETED';$('here').hidden=!show;
-  if(show&&!freshPos()&&!here.busy)locateNow();else if(show)renderHere()}
+function syncHere(){$('here').hidden=false;if(!freshPos()&&!here.busy)locateNow();else renderHere()}
 function renderLoc(data){const box=$('loc');box.replaceChildren();
   if(data.clockIn)box.append(locLine('📍 เข้างาน',data.inLocation));
   if(data.clockOut)box.append(locLine('📍 ออกงาน',data.outLocation))}
@@ -222,13 +221,13 @@ function updateButton(){const b=$('action');b.className='primary';
   if(!model){b.disabled=true;b.textContent='กำลังโหลด…';return}
   b.disabled=busy;
   if(busy){b.textContent='กำลังบันทึก…';return}
-  if(model.locationRequired&&model.status!=='COMPLETED'&&!here.pos){b.disabled=true;b.textContent=here.busy?'กำลังหาตำแหน่ง…':'เปิดตำแหน่งก่อนลงเวลา';return}
-  if(model.status==='NOT_STARTED'){b.textContent='ลงเวลาเข้างาน (Clock In)'}
-  else if(model.status==='WORKING'){b.classList.add(confirmTimer?'confirm':'out');b.textContent=confirmTimer?'แตะอีกครั้งเพื่อยืนยันออกงาน':'ลงเวลาออกงาน (Clock Out)'}
-  else{b.disabled=true;b.textContent='วันนี้ลงเวลาครบแล้ว ✓'}}
+  if(model.locationRequired&&!here.pos){b.disabled=true;b.textContent=here.busy?'กำลังหาตำแหน่ง…':'เปิดตำแหน่งก่อนลงเวลา';return}
+  // Any number of sessions per day: whenever not working, the next action is another Clock In.
+  if(model.status==='WORKING'){b.classList.add(confirmTimer?'confirm':'out');b.textContent=confirmTimer?'แตะอีกครั้งเพื่อยืนยันออกงาน':'ลงเวลาออกงาน (Clock Out)'}
+  else{b.textContent=model.status==='OFF_DUTY'?'ลงเวลาเข้างานอีกครั้ง (Clock In)':'ลงเวลาเข้างาน (Clock In)'}}
 
 $('action').onclick=()=>{if(busy||!model)return;
-  if(model.status==='NOT_STARTED')return submitClock('IN');
+  if(model.status!=='WORKING')return submitClock('IN');
   if(model.status==='WORKING'){
     if(!confirmTimer){confirmTimer=setTimeout(resetConfirm,4000);updateButton();return}
     resetConfirm();submitClock('OUT')}};
@@ -252,9 +251,13 @@ function renderHistory(list){const tb=$('history');tb.replaceChildren();
     const td=el('td');td.appendChild(el('span',LABELS[r.status]||r.status,'pill '+r.status));tr.appendChild(td);tb.appendChild(tr)}}
 
 function tick(){const now=serverNow();$('clock').textContent=fmtTime.format(new Date(now));
-  if(!model||!model.clockInEpoch){$('duration').textContent='–';return}
-  const end=model.status==='WORKING'?now:(model.clockOut?new Date(model.clockOut.replace(' ','T')+'+07:00').getTime():now);
-  $('duration').textContent=dur(end-model.clockInEpoch)}
+  if(!model)return;
+  // Today's total = finished sessions (from the server) + the open session, counted live.
+  const working=model.status==='WORKING'&&model.clockInEpoch,carried=working&&model.workDate!==model.today;
+  let ms=carried?0:(model.todayWorkedMs||0);
+  if(working)ms+=now-model.clockInEpoch;
+  $('durLabel').textContent=carried?'กะปัจจุบัน':'รวมวันนี้'+(model.sessionsToday>1?' ('+model.sessionsToday+' ครั้ง)':'');
+  $('duration').textContent=working||ms>0?dur(ms):'–'}
 
 async function load(){if(busy)return;busy=true;clearNotice();updateButton();
   try{render(await api('dashboard'))}
