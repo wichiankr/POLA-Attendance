@@ -298,15 +298,31 @@ function parseLocation_(loc) {
   return {lat:lat, lng:lng, acc:isFinite(acc) && acc >= 0 ? Math.min(Math.round(acc), MAX_ACCURACY_M) : ''};
 }
 
-/** Human-readable address via the built-in Maps service; empty if lookup fails or quota is used up. */
+/**
+ * Human-readable address via the built-in Maps service; empty if lookup fails or quota is used up.
+ * Cached per ~11 m grid cell so the live preview and the clock call share one lookup.
+ */
 function placeName_(loc) {
+  const cache = CacheService.getScriptCache();
+  const key = 'geo:' + loc.lat.toFixed(4) + ',' + loc.lng.toFixed(4);
+  const hit = cache.get(key);
+  if (hit !== null) return hit;
   try {
     const res = Maps.newGeocoder().setLanguage('th').reverseGeocode(loc.lat, loc.lng);
-    return res && res.results && res.results[0] ? String(res.results[0].formatted_address).slice(0, 300) : '';
+    const place = res && res.results && res.results[0] ? String(res.results[0].formatted_address).slice(0, 300) : '';
+    if (place) cache.put(key, place, 6 * 3600);
+    return place;
   } catch (err) {
     console.warn('reverseGeocode failed: ' + err.message);
     return '';
   }
+}
+
+/** Address for the "current location" card shown before clocking. */
+function placeView_(location) {
+  const loc = parseLocation_(location);
+  if (!loc) throw fail_('INPUT', 'ตำแหน่งไม่ถูกต้อง');
+  return {place:placeName_(loc)};
 }
 
 function locationView_(latLng, acc, place) {
@@ -320,6 +336,12 @@ function locationView_(latLng, acc, place) {
 function getDashboard() {
   const ss = getDb_();
   return dashboard_(ss, employee_(ss), new Date());
+}
+
+function previewPlace(location) {
+  const ss = getDb_();
+  employee_(ss); // employees only: keeps the Maps quota for staff
+  return placeView_(location);
 }
 
 function clock(action, location) {
@@ -345,6 +367,7 @@ function doPost(e) {
     switch (req.action) {
       case 'dashboard': data = dashboard_(ss, employeeByLine_(ss, lineUserId), new Date()); break;
       case 'clock': data = clockFor_(ss, employeeByLine_(ss, lineUserId), req.clockAction, req.location); break;
+      case 'place': employeeByLine_(ss, lineUserId); data = placeView_(req.location); break;
       case 'linkStart': data = linkStart_(ss, lineUserId, req.email); break;
       case 'linkVerify': data = linkVerify_(ss, lineUserId, req.code); break;
       default: throw fail_('INPUT', 'คำสั่งไม่ถูกต้อง');

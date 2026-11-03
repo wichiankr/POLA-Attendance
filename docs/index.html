@@ -40,7 +40,8 @@ input.code{letter-spacing:8px;text-align:center;font-size:24px;font-variant-nume
 @keyframes spin{to{transform:rotate(360deg)}}
 table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}th{text-align:left;color:var(--muted);font-weight:600;font-size:12px}
 th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numeric:tabular-nums}tr:last-child td{border-bottom:0}
-.loc{margin-top:12px;font-size:13px;color:var(--muted);line-height:1.6}.loc a{color:var(--brand);font-weight:600}.privacy{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
+.loc{margin-top:12px;font-size:13px;color:var(--muted);line-height:1.6}.loc a{color:var(--brand);font-weight:600}.here{margin:16px 0 4px;padding:14px;border-radius:12px;background:var(--soft)}.here-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.here-head .link{padding:0;text-decoration:none;color:var(--brand)}.here-place{margin-top:8px;font-weight:600;font-size:15px;line-height:1.45}.here-place.muted{color:var(--muted);font-weight:400}.here-err{margin-top:8px;color:var(--err);font-size:14px}.here-warn{margin-top:2px;color:var(--warn);font-size:13px}.here .small{margin-top:2px}.here-map{display:block;width:100%;height:170px;border:0;border-radius:10px;margin-top:10px;background:var(--line)}
+.privacy{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
 .scroll{overflow-x:auto}footer{text-align:center;font-size:12px;color:var(--muted);margin-top:18px}
 @media (max-width:420px){.clock{font-size:42px}.times{grid-template-columns:1fr 1fr}.times .dur{grid-column:span 2}th:nth-child(4),td:nth-child(4){display:none}}
 </style></head><body><main class="app">
@@ -83,6 +84,7 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
     <div><span class="small">ออกงาน</span><strong id="clockOut">--:--</strong></div>
     <div class="dur"><span class="small">ระยะเวลา</span><strong id="duration">–</strong></div>
   </div>
+  <div id="here" class="here" aria-live="polite" hidden></div>
   <div id="loc" class="loc"></div>
   <button id="action" class="primary" disabled>กำลังโหลด…</button>
   <div class="privacy">📍 ระบบบันทึกตำแหน่งเฉพาะตอนกดลงเวลาเท่านั้น ไม่มีการติดตามตลอดเวลา</div>
@@ -173,6 +175,39 @@ function locLine(label,l){const d=el('div');d.append(el('span',label+': '));
   if(!l){d.append(el('span','ไม่ได้บันทึกตำแหน่ง'));return d}
   const a=el('a',l.place||l.latLng);a.href=l.mapUrl;a.target='_blank';a.rel='noopener';d.append(a);
   if(l.accuracy!=null)d.append(el('span',' (±'+l.accuracy+' ม.)'));return d}
+function placeApi(p){return api('place',{location:p})}
+
+/* ---------- Current location card (shown before clocking) ---------- */
+const FRESH_MS=120e3;
+const here={pos:null,at:0,err:null,busy:false,place:'',placeFor:null,mapSrc:'',mapEl:null};
+function distM(a,b){const t=Math.PI/180,dLat=(b.lat-a.lat)*t,dLng=(b.lng-a.lng)*t;
+  const x=Math.sin(dLat/2)**2+Math.cos(a.lat*t)*Math.cos(b.lat*t)*Math.sin(dLng/2)**2;return 2*6371e3*Math.asin(Math.sqrt(x))}
+function freshPos(){return here.pos&&Date.now()-here.at<FRESH_MS?here.pos:null}
+function setPos(p){if(p.error){here.err=p.error;here.pos=null}else{here.err=null;here.pos=p;here.at=Date.now()}}
+async function locateNow(){if(here.busy)return;here.busy=true;renderHere();updateButton();
+  setPos(await getLocation());here.busy=false;renderHere();updateButton();lookupPlace()}
+async function lookupPlace(){const p=here.pos;if(!p)return;
+  // Only ask the server again after moving ~50 m, to save Maps quota.
+  if(here.placeFor&&distM(here.placeFor,p)<50)return;here.placeFor=p;here.place='';
+  try{const r=await placeApi(p);if(here.pos===p){here.place=r.place||'';renderHere()}}catch(e){here.placeFor=null}}
+function renderHere(){const box=$('here');box.replaceChildren();
+  const head=el('div',null,'here-head');head.append(el('b','📍 ตำแหน่งปัจจุบันของคุณ'));
+  const btn=el('button',here.busy?'กำลังหา…':'↻ รีเฟรช','link');btn.disabled=here.busy;btn.onclick=locateNow;head.append(btn);box.append(head);
+  if(here.err){const d=el('div',LOC_ERR[here.err],'here-err');box.append(d);
+    if(model&&model.locationRequired)box.append(el('div','ต้องเปิดตำแหน่งก่อนจึงจะลงเวลาได้','here-err'));return}
+  const p=here.pos;
+  if(!p){box.append(el('div','กำลังหาตำแหน่ง…','here-place muted'));return}
+  box.append(el('div',here.place||(here.placeFor===p?'กำลังหาที่อยู่…':p.lat.toFixed(5)+', '+p.lng.toFixed(5)),'here-place'));
+  const weak=p.acc>200;
+  box.append(el('div','ความแม่นยำ ±'+p.acc+' ม.'+(weak?' · สัญญาณ GPS อ่อน ลองขยับไปใกล้หน้าต่างแล้วกดรีเฟรช':''),weak?'here-warn':'small'));
+  const d=0.0025,src='https://www.openstreetmap.org/export/embed.html?bbox='+[p.lng-d,p.lat-d,p.lng+d,p.lat+d].map(n=>n.toFixed(5)).join(',')+
+    '&layer=mapnik&marker='+p.lat.toFixed(5)+','+p.lng.toFixed(5);
+  // Reuse the iframe when the position has not changed, so the map does not flicker on re-render.
+  if(!here.mapEl||here.mapSrc!==src){const f=el('iframe');f.className='here-map';f.title='แผนที่ตำแหน่งปัจจุบัน';
+    f.loading='lazy';f.referrerPolicy='no-referrer';f.src=src;here.mapEl=f;here.mapSrc=src}
+  box.append(here.mapEl)}
+function syncHere(data){const show=data.status!=='COMPLETED';$('here').hidden=!show;
+  if(show&&!freshPos()&&!here.busy)locateNow();else if(show)renderHere()}
 function renderLoc(data){const box=$('loc');box.replaceChildren();
   if(data.clockIn)box.append(locLine('📍 เข้างาน',data.inLocation));
   if(data.clockOut)box.append(locLine('📍 ออกงาน',data.outLocation))}
@@ -187,6 +222,7 @@ function updateButton(){const b=$('action');b.className='primary';
   if(!model){b.disabled=true;b.textContent='กำลังโหลด…';return}
   b.disabled=busy;
   if(busy){b.textContent='กำลังบันทึก…';return}
+  if(model.locationRequired&&model.status!=='COMPLETED'&&!here.pos){b.disabled=true;b.textContent=here.busy?'กำลังหาตำแหน่ง…':'เปิดตำแหน่งก่อนลงเวลา';return}
   if(model.status==='NOT_STARTED'){b.textContent='ลงเวลาเข้างาน (Clock In)'}
   else if(model.status==='WORKING'){b.classList.add(confirmTimer?'confirm':'out');b.textContent=confirmTimer?'แตะอีกครั้งเพื่อยืนยันออกงาน':'ลงเวลาออกงาน (Clock Out)'}
   else{b.disabled=true;b.textContent='วันนี้ลงเวลาครบแล้ว ✓'}}
@@ -204,7 +240,7 @@ function render(data,msg){show('main');model=data;busy=false;lastLoad=Date.now()
   $('clockIn').textContent=timeOnly(data.clockIn);$('clockOut').textContent=timeOnly(data.clockOut);
   $('status').textContent=LABELS[data.status]||data.status;$('status').className='pill '+data.status;
   if(data.status==='WORKING'&&data.workDate!==data.today)$('status').textContent+=' (กะจาก '+fmtShort.format(dateOf(data.workDate))+')';
-  renderHistory(data.history);renderLoc(data);tick();
+  renderHistory(data.history);renderLoc(data);syncHere(data);tick();
   if(msg)notice('good',msg);else clearNotice();
   updateButton()}
 
@@ -225,7 +261,8 @@ async function load(){if(busy)return;busy=true;clearNotice();updateButton();
   catch(e){busy=false;if(handleAuth(e))return;if(e.code==='NOT_LINKED')return startLink();notice('error',e.message,true);updateButton()}}
 
 async function submitClock(action){if(busy||!model)return;busy=true;updateButton();notice('info','📍 กำลังหาตำแหน่ง…');
-  const pos=await getLocation();
+  let pos=freshPos();
+  if(!pos){pos=await getLocation();setPos(pos);renderHere()}
   if(pos.error&&model.locationRequired){busy=false;notice('error',LOC_ERR[pos.error]+' · ต้องมีตำแหน่งจึงจะลงเวลาได้');updateButton();return}
   notice('info','กำลังบันทึกเวลา…');
   try{const d=await api('clock',{clockAction:action,location:pos.error?null:pos});
