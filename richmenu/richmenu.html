@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- Source for richmenu.png: LINE compact rich menu 2500x843, two equal areas (1250 each). -->
+<html lang="th"><head><meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:2500px;height:843px;overflow:hidden;font-family:"Noto Sans Thai","Leelawadee UI",Tahoma,sans-serif;display:flex}
+.area{width:1250px;height:843px;display:flex;align-items:center;gap:56px;padding:0 90px;position:relative}
+.clock{background:linear-gradient(135deg,#3a6dc9,#1a3870);color:#fff}
+.hr{background:#f3f6fa;color:#172337}
+.icon{flex:none;width:300px;height:300px;border-radius:70px;display:grid;place-items:center}
+.clock .icon{background:rgba(255,255,255,.14)}
+.hr .icon{background:#e3eaf7}
+h1{font-size:108px;font-weight:800;line-height:1.15;letter-spacing:-1px;white-space:nowrap}
+p{font-size:62px;font-weight:600;margin-top:18px;opacity:.85}
+.hr p{color:#4b5b73;opacity:1}
+.tap{display:inline-block;margin-top:34px;font-size:46px;font-weight:700;padding:12px 34px;border-radius:40px}
+.clock .tap{background:#1fb86e;color:#fff}
+.hr .tap{background:#244c94;color:#fff}
+</style></head><body>
+<div class="area clock">
+  <div class="icon">
+    <svg viewBox="96 96 336 336" width="250" height="250">
+      <path d="M256 104 L408 236 L364 236 L364 382 Q364 404 342 404 L170 404 Q148 404 148 382 L148 236 L104 236 Z" fill="#fff" stroke="#fff" stroke-width="20" stroke-linejoin="round"/>
+      <circle cx="256" cy="300" r="74" fill="#244c94"/>
+      <path d="M256 300 V252 M256 300 L290 320" stroke="#fff" stroke-width="15" stroke-linecap="round" fill="none"/>
+      <circle cx="256" cy="300" r="9" fill="#fff"/>
+      <circle cx="356" cy="374" r="60" fill="#1fb86e" stroke="#4a73c0" stroke-width="12"/>
+      <path d="M329 375 L349 395 L384 357" stroke="#fff" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+  </div>
+  <div><h1>ลงเวลาทำงาน</h1><p>Clock In · Clock Out</p><span class="tap">แตะเพื่อเปิด</span></div>
+</div>
+<div class="area hr">
+  <div class="icon">
+    <svg viewBox="0 0 24 24" width="190" height="190" fill="none" stroke="#244c94" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z" fill="#fff"/>
+      <circle cx="9" cy="12" r=".6" fill="#244c94"/><circle cx="13" cy="12" r=".6" fill="#244c94"/><circle cx="17" cy="12" r=".6" fill="#244c94"/>
+    </svg>
+  </div>
+  <div><h1>ติดต่อ HR</h1><p>สอบถาม · แจ้งปัญหา</p><span class="tap">ส่งข้อความ</span></div>
+</div>
+</body></html>

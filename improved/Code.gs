@@ -1,5 +1,5 @@
 /**
- * POLA WFH Attendance | Version 1.3
+ * POLA WFH Attendance | Version 1.4 (location tagging)
  * Two ways in:
  *  - Google web app (doGet + google.script.run): identity = same-domain Google Workspace login.
  *  - LINE LIFF (doPost JSON API): identity = LINE ID token verified with LINE, linked to an employee
@@ -9,12 +9,13 @@ const TZ = 'Asia/Bangkok';
 const TZ_OFFSET = '+07:00'; // Asia/Bangkok has no DST.
 const SHEET_EMP = 'Employees';
 const SHEET_LOG = 'Attendance';
-// Keep the original columns intact. EmployeeId and LineUserId are appended columns.
+// Keep the original columns intact. EmployeeId, LineUserId and the location columns are appended.
 const HEAD_EMP = ['Email','FullName','Department','Active','EmployeeId','LineUserId'];
-const HEAD_LOG = ['RecordId','Email','FullName','Department','WorkDate','ClockIn','ClockOut','Status','Notes','EmployeeId'];
+const HEAD_LOG = ['RecordId','Email','FullName','Department','WorkDate','ClockIn','ClockOut','Status','Notes','EmployeeId',
+  'InLocation','InAccuracyM','InPlace','OutLocation','OutAccuracyM','OutPlace'];
 // Column indexes (0-based).
 const E = {EMAIL:0, NAME:1, DEPT:2, ACTIVE:3, EMP_ID:4, LINE:5};
-const L = {ID:0, EMAIL:1, NAME:2, DEPT:3, DATE:4, IN:5, OUT:6, STATUS:7, NOTES:8, EMP_ID:9};
+const L = {ID:0, EMAIL:1, NAME:2, DEPT:3, DATE:4, IN:5, OUT:6, STATUS:7, NOTES:8, EMP_ID:9, IN_LOC:10, OUT_LOC:13};
 const EMP_ID_RE = /^[0-9]{4}$/;
 // A shift that started yesterday (overnight work) can still be clocked out within this window.
 const MAX_SHIFT_HOURS = 20;
@@ -24,6 +25,8 @@ const LINK_TTL_SEC = 600;
 const LINK_MAX_TRIES = 5;
 const LINK_RESEND_SEC = 60;
 const REMINDER_HOUR = 19;
+// Location tagging. Script property LOCATION_REQUIRED=true blocks clocking without a GPS fix.
+const MAX_ACCURACY_M = 100000;
 
 /**
  * Safe to run again: adds missing headers; does NOT erase employee or attendance records.
@@ -94,6 +97,13 @@ function fail_(code, message) {
   return err;
 }
 
+/** Gmail ignores dots and "+tag" in the local part, so a.b+x@gmail.com and ab@gmail.com are one inbox. */
+function canonicalEmail_(email) {
+  const m = String(email || '').trim().toLowerCase().match(/^([^@]+)@(gmail\.com|googlemail\.com)$/);
+  return m ? m[1].split('+')[0].replace(/\./g, '') + '@gmail.com' : String(email || '').trim().toLowerCase();
+}
+function sameEmail_(a, b) { return canonicalEmail_(a) === canonicalEmail_(b); }
+
 function isActive_(value) {
   return ['true', 'yes', 'y', '1', 'ใช่'].indexOf(String(value || '').trim().toLowerCase()) !== -1;
 }
@@ -129,7 +139,7 @@ function employee_(ss) {
   // Do not trust user-submitted email or employee number: use verified Workspace identity.
   const email = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
   if (!email) throw new Error('ไม่สามารถยืนยันบัญชี Google ได้ กรุณาเข้าสู่ระบบด้วยบัญชี Google Workspace ของบริษัท (ไม่ใช่ Gmail ส่วนตัว)');
-  const user = employeeWhere_(ss, rowEmail => rowEmail === email);
+  const user = employeeWhere_(ss, rowEmail => sameEmail_(rowEmail, email));
   if (!user) throw new Error('บัญชีนี้ไม่อยู่ในรายชื่อพนักงานที่ใช้งานอยู่ กรุณาติดต่อ HR');
   return user;
 }
@@ -153,14 +163,18 @@ function parseTime_(text) {
  */
 function normalizeRow_(r) {
   const cell = (v, fmt) => v instanceof Date ? Utilities.formatDate(v, TZ, fmt) : String(v == null ? '' : v).trim();
-  const empId = typeof r[L.EMP_ID] === 'number' ? String(r[L.EMP_ID]).padStart(4, '0') : cell(r[L.EMP_ID]);
+  // v1.1 appendRow() turned "0097" into 97 (number, or text "97" once the column was reformatted).
+  const rawId = cell(r[L.EMP_ID]);
+  const empId = /^[0-9]{1,3}$/.test(rawId) ? rawId.padStart(4, '0') : rawId;
   return {
     email: cell(r[L.EMAIL]).toLowerCase(),
     date: cell(r[L.DATE], 'yyyy-MM-dd'),
     clockIn: cell(r[L.IN], 'yyyy-MM-dd HH:mm:ss'),
     clockOut: cell(r[L.OUT], 'yyyy-MM-dd HH:mm:ss'),
     status: cell(r[L.STATUS]).toUpperCase(),
-    empId: empId
+    empId: empId,
+    inLoc: cell(r[L.IN_LOC]), inAcc: cell(r[L.IN_LOC + 1]), inPlace: cell(r[L.IN_LOC + 2]),
+    outLoc: cell(r[L.OUT_LOC]), outAcc: cell(r[L.OUT_LOC + 1]), outPlace: cell(r[L.OUT_LOC + 2])
   };
 }
 
@@ -215,6 +229,9 @@ function dashboard_(ss, user, now) {
     clockIn: current ? current.clockIn : '',
     clockOut: current ? current.clockOut : '',
     clockInEpoch: current && parseTime_(current.clockIn) ? parseTime_(current.clockIn).getTime() : null,
+    locationRequired: locationRequired_(),
+    inLocation: current ? locationView_(current.inLoc, current.inAcc, current.inPlace) : null,
+    outLocation: current ? locationView_(current.outLoc, current.outAcc, current.outPlace) : null,
     history: st.mine.map(r => ({
       date: r.date, clockIn: r.clockIn, clockOut: r.clockOut, hours: hours_(r),
       // An open shift that is no longer the current one was never clocked out.
@@ -229,8 +246,14 @@ function lock_() {
   return lock;
 }
 
-function clockFor_(ss, user, action) {
+function clockFor_(ss, user, action, location) {
   if (action !== 'IN' && action !== 'OUT') throw fail_('RULE', 'คำสั่งไม่ถูกต้อง');
+  const loc = parseLocation_(location);
+  if (!loc && locationRequired_()) {
+    throw fail_('LOCATION', 'ต้องอนุญาตให้เข้าถึงตำแหน่งก่อนลงเวลา กรุณาเปิด Location แล้วลองใหม่');
+  }
+  // Reverse geocoding is a network call: do it before taking the lock.
+  const tag = loc ? [loc.lat.toFixed(6) + ',' + loc.lng.toFixed(6), String(loc.acc), placeName_(loc)] : ['', '', ''];
   const lock = lock_();
   try {
     const sh = ss.getSheetByName(SHEET_LOG);
@@ -240,12 +263,13 @@ function clockFor_(ss, user, action) {
       if (st.openRec) throw fail_('RULE', 'คุณยังไม่ได้ลงเวลาออกจากกะที่เริ่มเมื่อ ' + st.openRec.clockIn);
       if (st.todayRec) throw fail_('RULE', 'วันนี้คุณลงเวลาเข้างานไปแล้ว');
       const values = [Utilities.getUuid(), user.email, user.name, user.department, st.today,
-        timeText_(now), '', 'WORKING', '', user.employeeId];
+        timeText_(now), '', 'WORKING', '', user.employeeId].concat(tag, ['', '', '']);
       // Explicit text-formatted write instead of appendRow(), so Sheets cannot re-type the values.
       sh.getRange(sh.getLastRow() + 1, 1, 1, values.length).setNumberFormat('@').setValues([values]);
     } else {
       if (!st.openRec) throw fail_('RULE', st.todayRec ? 'วันนี้คุณลงเวลาออกงานไปแล้ว' : 'กรุณาลงเวลาเข้างานก่อน');
       sh.getRange(st.openRec.row, L.OUT + 1, 1, 2).setNumberFormat('@').setValues([[timeText_(now), 'COMPLETED']]);
+      sh.getRange(st.openRec.row, L.OUT_LOC + 1, 1, 3).setNumberFormat('@').setValues([tag]);
       // Backfill EmployeeId when clocking out of a record created by version 1.0.
       if (!st.openRec.empId) sh.getRange(st.openRec.row, L.EMP_ID + 1).setNumberFormat('@').setValue(user.employeeId);
     }
@@ -256,6 +280,41 @@ function clockFor_(ss, user, action) {
   }
 }
 
+/* ---------- Location tagging ---------- */
+
+function locationRequired_() {
+  return String(PropertiesService.getScriptProperties().getProperty('LOCATION_REQUIRED') || '').toLowerCase() === 'true';
+}
+
+/**
+ * Validates the browser-reported position. It comes from the client, so it is a strong hint,
+ * not proof: a determined user can fake GPS. Returns null when absent or malformed.
+ */
+function parseLocation_(loc) {
+  if (!loc || typeof loc !== 'object') return null;
+  const lat = Number(loc.lat), lng = Number(loc.lng), acc = Number(loc.acc);
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  if (lat === 0 && lng === 0) return null;
+  return {lat:lat, lng:lng, acc:isFinite(acc) && acc >= 0 ? Math.min(Math.round(acc), MAX_ACCURACY_M) : ''};
+}
+
+/** Human-readable address via the built-in Maps service; empty if lookup fails or quota is used up. */
+function placeName_(loc) {
+  try {
+    const res = Maps.newGeocoder().setLanguage('th').reverseGeocode(loc.lat, loc.lng);
+    return res && res.results && res.results[0] ? String(res.results[0].formatted_address).slice(0, 300) : '';
+  } catch (err) {
+    console.warn('reverseGeocode failed: ' + err.message);
+    return '';
+  }
+}
+
+function locationView_(latLng, acc, place) {
+  if (!latLng) return null;
+  return {latLng:latLng, accuracy:acc === '' ? null : Number(acc), place:place,
+    mapUrl:'https://www.google.com/maps?q=' + encodeURIComponent(latLng)};
+}
+
 /* ---------- Google web app (google.script.run) ---------- */
 
 function getDashboard() {
@@ -263,9 +322,9 @@ function getDashboard() {
   return dashboard_(ss, employee_(ss), new Date());
 }
 
-function clock(action) {
+function clock(action, location) {
   const ss = getDb_();
-  return clockFor_(ss, employee_(ss), action);
+  return clockFor_(ss, employee_(ss), action, location);
 }
 
 /* ---------- LINE LIFF JSON API ---------- */
@@ -285,7 +344,7 @@ function doPost(e) {
     let data;
     switch (req.action) {
       case 'dashboard': data = dashboard_(ss, employeeByLine_(ss, lineUserId), new Date()); break;
-      case 'clock': data = clockFor_(ss, employeeByLine_(ss, lineUserId), req.clockAction); break;
+      case 'clock': data = clockFor_(ss, employeeByLine_(ss, lineUserId), req.clockAction, req.location); break;
       case 'linkStart': data = linkStart_(ss, lineUserId, req.email); break;
       case 'linkVerify': data = linkVerify_(ss, lineUserId, req.code); break;
       default: throw fail_('INPUT', 'คำสั่งไม่ถูกต้อง');
@@ -336,17 +395,25 @@ function linkStart_(ss, lineUserId, email) {
   cache.put('linkwait:' + lineUserId, '1', LINK_RESEND_SEC);
   cache.put('linkmail:' + sha_(email), '1', LINK_RESEND_SEC);
   let user = null;
-  try { user = employeeWhere_(ss, rowEmail => rowEmail === email); } catch (err) { user = null; }
+  try {
+    user = employeeWhere_(ss, rowEmail => sameEmail_(rowEmail, email));
+    if (!user) console.warn('linkStart: no active employee matches ' + email);
+  } catch (err) {
+    console.warn('linkStart: employee lookup failed for ' + email + ': ' + err.message);
+  }
   // Same reply whether or not the address is an employee, so it cannot be used to discover who works here.
+  // The reason is only logged above, visible to the owner under Apps Script → Executions.
   if (user) {
     const code = otp_();
-    cache.put('link:' + lineUserId, JSON.stringify({email:email, hash:sha_(code + ':' + lineUserId), tries:0}), LINK_TTL_SEC);
+    // Store and mail the address as registered in the sheet, not as typed.
+    cache.put('link:' + lineUserId, JSON.stringify({email:user.email, hash:sha_(code + ':' + lineUserId), tries:0}), LINK_TTL_SEC);
     MailApp.sendEmail({
-      to: email,
+      to: user.email,
       subject: 'รหัสยืนยันการเชื่อมบัญชี LINE | POLA WFH Attendance',
       body: 'รหัสยืนยันของคุณคือ ' + code + '\n\nรหัสนี้ใช้ได้ภายใน 10 นาที เพื่อเชื่อมบัญชี LINE กับระบบลงเวลาทำงาน\n' +
         'หากคุณไม่ได้ขอรหัสนี้ ไม่ต้องดำเนินการใดๆ และห้ามส่งรหัสนี้ให้ผู้อื่น'
     });
+    console.log('linkStart: OTP sent to ' + user.email + ' (mail quota left today: ' + MailApp.getRemainingDailyQuota() + ')');
   }
   return {sent:true};
 }

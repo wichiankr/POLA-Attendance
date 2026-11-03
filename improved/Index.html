@@ -30,6 +30,7 @@ button:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
 .link{background:none;color:inherit;text-decoration:underline;padding:0 0 0 6px;font-weight:700}
 table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}th{text-align:left;color:var(--muted);font-weight:600;font-size:12px}
 th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numeric:tabular-nums}tr:last-child td{border-bottom:0}
+.loc{margin-top:12px;font-size:13px;color:var(--muted);line-height:1.6}.loc a{color:var(--brand);font-weight:600}.privacy{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
 .scroll{overflow-x:auto}footer{text-align:center;font-size:12px;color:var(--muted);margin-top:18px}
 @media (max-width:420px){.clock{font-size:42px}.times{grid-template-columns:1fr 1fr}.times .dur{grid-column:span 2}th:nth-child(4),td:nth-child(4){display:none}}
 </style></head><body><main class="app">
@@ -45,7 +46,9 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
     <div><span class="small">ออกงาน</span><strong id="clockOut">--:--</strong></div>
     <div class="dur"><span class="small">ระยะเวลา</span><strong id="duration">–</strong></div>
   </div>
+  <div id="loc" class="loc"></div>
   <button id="action" class="primary" disabled>กำลังโหลด…</button>
+  <div class="privacy">📍 ระบบบันทึกตำแหน่งเฉพาะตอนกดลงเวลาเท่านั้น ไม่มีการติดตามตลอดเวลา</div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
 </section>
 
@@ -67,6 +70,24 @@ const dateOf=key=>new Date(key+'T12:00:00+07:00');
 const serverNow=()=>Date.now()+offset;
 function el(tag,text,cls){const e=document.createElement(tag);if(text!=null)e.textContent=text;if(cls)e.className=cls;return e}
 function dur(ms){if(ms<0)ms=0;const m=Math.floor(ms/6e4);return Math.floor(m/60)+' ชม. '+String(m%60).padStart(2,'0')+' น.'}
+
+
+/* ---------- Location ---------- */
+// Resolves {lat,lng,acc} or {error:'DENIED'|'UNAVAILABLE'|'TIMEOUT'|'UNSUPPORTED'}; never rejects.
+function getLocation(){return new Promise(resolve=>{
+  if(!navigator.geolocation)return resolve({error:'UNSUPPORTED'});
+  navigator.geolocation.getCurrentPosition(
+    p=>resolve({lat:p.coords.latitude,lng:p.coords.longitude,acc:Math.round(p.coords.accuracy)}),
+    e=>resolve({error:e.code===1?'DENIED':e.code===3?'TIMEOUT':'UNAVAILABLE'}),
+    {enableHighAccuracy:true,timeout:12000,maximumAge:60000})})}
+const LOC_ERR={DENIED:'ไม่ได้รับอนุญาตให้เข้าถึงตำแหน่ง (เปิดได้ที่ การตั้งค่า → LINE → ตำแหน่ง)',UNAVAILABLE:'หาตำแหน่งไม่ได้ กรุณาเปิด GPS/Location',TIMEOUT:'หาตำแหน่งนานเกินไป กรุณาลองใหม่ในที่โล่ง',UNSUPPORTED:'อุปกรณ์นี้ไม่รองรับการระบุตำแหน่ง'};
+function locLine(label,l){const d=el('div');d.append(el('span',label+': '));
+  if(!l){d.append(el('span','ไม่ได้บันทึกตำแหน่ง'));return d}
+  const a=el('a',l.place||l.latLng);a.href=l.mapUrl;a.target='_blank';a.rel='noopener';d.append(a);
+  if(l.accuracy!=null)d.append(el('span',' (±'+l.accuracy+' ม.)'));return d}
+function renderLoc(data){const box=$('loc');box.replaceChildren();
+  if(data.clockIn)box.append(locLine('📍 เข้างาน',data.inLocation));
+  if(data.clockOut)box.append(locLine('📍 ออกงาน',data.outLocation))}
 
 function notice(kind,text,retry){const n=$('notice');n.className='notice show '+kind;n.replaceChildren(el('span',text));
   if(retry){const b=el('button','ลองใหม่','link');b.onclick=load;n.appendChild(b)}}
@@ -95,7 +116,7 @@ function render(data,msg){model=data;busy=false;lastLoad=Date.now();offset=data.
   $('clockIn').textContent=timeOnly(data.clockIn);$('clockOut').textContent=timeOnly(data.clockOut);
   $('status').textContent=LABELS[data.status]||data.status;$('status').className='pill '+data.status;
   if(data.status==='WORKING'&&data.workDate!==data.today)$('status').textContent+=' (กะจาก '+fmtShort.format(dateOf(data.workDate))+')';
-  renderHistory(data.history);tick();
+  renderHistory(data.history);renderLoc(data);tick();
   if(msg)notice('good',msg);else clearNotice();
   updateButton()}
 
@@ -114,10 +135,14 @@ function tick(){const now=serverNow();$('clock').textContent=fmtTime.format(new 
 function fail(e){busy=false;notice('error',cleanMsg(e),!model);updateButton()}
 function load(){if(busy&&model)return;busy=true;clearNotice();updateButton();
   google.script.run.withSuccessHandler(d=>render(d)).withFailureHandler(fail).getDashboard()}
-function submitClock(action){if(busy||!model)return;busy=true;updateButton();notice('info','กำลังบันทึกเวลา…');
-  google.script.run.withSuccessHandler(d=>render(d,(action==='IN'?'ลงเวลาเข้างานเรียบร้อย ':'ลงเวลาออกงานเรียบร้อย ')+timeOnly(action==='IN'?d.clockIn:d.clockOut)+' น.'))
+async function submitClock(action){if(busy||!model)return;busy=true;updateButton();notice('info','📍 กำลังหาตำแหน่ง…');
+  const pos=await getLocation();
+  if(pos.error&&model.locationRequired){busy=false;notice('error',LOC_ERR[pos.error]+' · ต้องมีตำแหน่งจึงจะลงเวลาได้');updateButton();return}
+  notice('info','กำลังบันทึกเวลา…');
+  google.script.run.withSuccessHandler(d=>render(d,(action==='IN'?'ลงเวลาเข้างานเรียบร้อย ':'ลงเวลาออกงานเรียบร้อย ')+timeOnly(action==='IN'?d.clockIn:d.clockOut)+' น.'+
+      (pos.error?' (ไม่ได้บันทึกตำแหน่ง: '+LOC_ERR[pos.error]+')':'')))
     // On failure, re-sync with the server (e.g. clocked in from another device) but keep the error visible.
-    .withFailureHandler(e=>{fail(e);google.script.run.withSuccessHandler(d=>{render(d);notice('error',cleanMsg(e))}).getDashboard()}).clock(action)}
+    .withFailureHandler(e=>{fail(e);google.script.run.withSuccessHandler(d=>{render(d);notice('error',cleanMsg(e))}).getDashboard()}).clock(action,pos.error?null:pos)}
 
 setInterval(()=>{tick();
   // Refresh when the day changes or every 5 minutes so a tab left open never shows a stale status.
