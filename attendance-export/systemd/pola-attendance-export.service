@@ -1,0 +1,12 @@
+[Unit]
+Description=Export Google Sheets attendance to SFTP
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/pola-attendance/attendance-export
+ExecStart=/usr/bin/docker compose run --rm --no-deps attendance-export
+TimeoutStartSec=15min
+UMask=0077
