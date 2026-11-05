@@ -129,7 +129,8 @@ test('both inline browser scripts parse successfully and contain the same shared
     const section=html.split('/* ---------- HR daily review ---------- */')[1].split('/* ---------- End HR daily review ---------- */')[0];
     shared.push(section.replace(/function requestHr\(date\)\{[^\n]*\}/,''));
     assert.ok(html.includes('syncHrAccess(data)'));
-    assert.ok(html.includes('id="hrPanel" class="card hr-panel" hidden'));
+    assert.ok(html.includes('id="hrPanel" class="card hr-panel" role="tabpanel"'));
+    assert.ok(html.includes('id="tabHr" class="app-tab"'));
   }
   assert.equal(shared[0],shared[1]);
 });

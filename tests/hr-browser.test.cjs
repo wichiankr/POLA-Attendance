@@ -53,8 +53,14 @@ try{
   const assert=(condition,message)=>{if(!condition)throw new Error(message)};
   syncHere=()=>{};load=async()=>{};
   requestHr=async date=>date===data.today?sample:{date,today:data.today,employeeCount:0,punchCount:0,rows:[]};
-  render(data);assert(!$('hrPanel').hidden,'HR access');assert($('hrDate').value===data.today,'default date');
-  $('hrPanel').open=true;await loadHr();assert($('hrRecords').children.length===2,'rows');
+  render(data);assert(!$('tabHr').hidden,'HR access');assert($('hrDate').value===data.today,'default date');
+  assert(activeTab==='attendance'&&!$('attendancePanel').hidden&&$('hrPanel').hidden,'default attendance tab');
+  assert($('main').contains($('hrPanel')),'all tabs inside authenticated workspace');
+  $('tabHistory').click();assert(!$('historyPanel').hidden&&$('attendancePanel').hidden,'history tab');
+  $('tabHistory').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+  assert(activeTab==='hr'&&document.activeElement===$('tabHr'),'keyboard tab navigation');
+  await loadHr();assert($('hrRecords').children.length===2,'rows');
+  assert($('attendancePanel').hidden&&$('historyPanel').hidden&&!$('hrPanel').hidden,'HR tab isolated');
   assert(!$('hrRecords').querySelector('img'),'safe text rendering');
   $('hrPrevious').click();await Promise.resolve();await Promise.resolve();
   assert($('hrDate').value==='2026-11-04','previous day');assert($('hrStatus').textContent.includes('0 คน'),'empty date');
@@ -64,10 +70,16 @@ try{
   callbacks['2026-11-04']({date:'2026-11-04',today:data.today,employeeCount:0,punchCount:0,rows:[]});await current;
   callbacks['2026-11-03']({...sample,date:'2026-11-03'});await old;assert(hrLoadedDate==='2026-11-04','ignore stale response');
   requestHr=async()=>{throw new Error('test failure')};await loadHr();assert($('hrRecords').children.length===0,'clear stale rows on failure');assert($('hrStatus').textContent.includes('test failure'),'error message');
-  data.user.isHr=false;syncHrAccess(data);assert($('hrPanel').hidden,'deny ordinary user');assert(!$('hrRecords').children.length,'clear HR data');
-  data.user.isHr=true;render(data);requestHr=async()=>sample;$('hrDate').value=data.today;$('hrPanel').open=true;await loadHr();
+  data.user.isHr=false;syncHrAccess(data);assert($('hrPanel').hidden&&$('tabHr').hidden,'deny ordinary user');assert(!$('hrRecords').children.length,'clear HR data');
+  assert(activeTab==='attendance'&&!$('attendancePanel').hidden,'revoked user returns to attendance');
+  selectTab('hr');assert(activeTab==='attendance','direct HR navigation rejected');
+  $('tabHistory').click();$('tabHistory').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+  assert(activeTab==='attendance','keyboard skips unavailable HR tab');
+  sample.rows[1].name='พนักงานทดสอบ สอง';
+  data.user.isHr=true;render(data);requestHr=async()=>sample;$('hrDate').value=data.today;$('tabHr').click();await loadHr();
   assert(document.documentElement.scrollWidth<=innerWidth,'no page overflow');
-  document.body.dataset.hrChecks='passed';location.hash='hrPanel';
+  if(document.activeElement instanceof HTMLElement)document.activeElement.blur();
+  document.body.dataset.hrChecks='passed';
 }catch(error){document.body.dataset.hrChecks='failed';document.body.dataset.hrError=error.message}
 })();`;
   assert.ok(html.includes('boot();\n</script>'));

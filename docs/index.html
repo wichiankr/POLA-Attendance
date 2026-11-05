@@ -47,7 +47,6 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 @media (max-width:420px){.clock{font-size:42px}.times{grid-template-columns:1fr 1fr}.times .dur{grid-column:span 2}th:nth-child(4),td:nth-child(4){display:none}}
 
 /* HR daily review */
-.hr-panel>summary{cursor:pointer;font-weight:750;color:var(--brand);padding:2px 0}
 .hr-caption{margin:12px 0;color:var(--muted);font-size:13px;line-height:1.6}
 .hr-controls{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:14px 0}
 .hr-controls label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;margin:0;flex:1;min-width:155px}
@@ -58,7 +57,18 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 .hr-table{min-width:720px}.hr-table th,.hr-table td{vertical-align:top}.hr-table th:nth-child(4),.hr-table td:nth-child(4){display:table-cell}
 .hr-table .hr-name{min-width:140px}.hr-table details{max-width:260px;font-size:13px}.hr-table summary{cursor:pointer;color:var(--brand);white-space:nowrap}
 .hr-punch{padding:6px 0;white-space:normal;line-height:1.5}.hr-punch a{color:var(--brand)}
-@media(min-width:800px){.app:has(.hr-panel[open]){max-width:1000px}}
+
+/* Main navigation */
+[hidden]{display:none!important}
+.app-nav{display:flex;gap:5px;padding:6px;background:var(--card);border:1px solid var(--line);border-radius:15px;position:sticky;top:12px;z-index:5;box-shadow:0 3px 14px #10224808}
+.app-tab{flex:1;min-width:0;min-height:46px;padding:10px 12px;background:transparent;color:var(--muted);font-size:14px;font-weight:700;white-space:nowrap;border-radius:10px}
+.app-tab[aria-selected="true"]{background:var(--brand);color:var(--brand-ink);box-shadow:0 2px 5px #10224816}
+.app-tab:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.hr-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.hr-heading h2{font-size:20px;margin:0;letter-spacing:-.3px}
+.hr-heading .chip{background:var(--brand-soft);color:var(--brand);border:0}
+@media(min-width:800px){.app.hr-review{max-width:1000px}}
+@media(max-width:420px){.app-tab{font-size:12px;padding:10px 6px}.app-nav{top:8px}}
 </style></head><body><main class="app">
 <header><div class="brand">POLA THAILAND</div><h1 id="greet">WFH Attendance</h1><div class="chips" id="identity"></div></header>
 
@@ -90,7 +100,14 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 
 <!-- Attendance -->
 <div id="main" hidden>
-<section class="card" aria-labelledby="todayTitle">
+
+<nav id="appTabs" class="app-nav" role="tablist" aria-label="เมนูระบบลงเวลา" hidden>
+<button id="tabAttendance" class="app-tab" type="button" role="tab" aria-controls="attendancePanel" aria-selected="true">ลงเวลา</button>
+<button id="tabHistory" class="app-tab" type="button" role="tab" aria-controls="historyPanel" aria-selected="false" tabindex="-1">ประวัติของฉัน</button>
+<button id="tabHr" class="app-tab" type="button" role="tab" aria-controls="hrPanel" aria-selected="false" tabindex="-1" hidden>ตรวจสอบพนักงาน</button>
+</nav>
+
+<section id="attendancePanel" class="card" role="tabpanel" aria-labelledby="tabAttendance" tabindex="0">
   <div class="row"><b id="todayTitle">ลงเวลาทำงานวันนี้</b><span id="status" class="pill"></span></div>
   <div id="clock" class="clock">--:--:--</div>
   <div class="small" id="today">&nbsp;</div>
@@ -106,13 +123,12 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
   <div class="privacy">📍 ระบบบันทึกตำแหน่งเฉพาะตอนกดลงเวลาเท่านั้น ไม่มีการติดตามตลอดเวลา</div>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
 </section>
-<section class="card" aria-labelledby="histTitle"><b id="histTitle">ประวัติ 10 รายการล่าสุด</b>
+<section id="historyPanel" class="card" role="tabpanel" aria-labelledby="tabHistory" tabindex="0" hidden><b id="histTitle">ประวัติ 10 รายการล่าสุด</b>
 <div class="scroll"><table><thead><tr><th>วันที่</th><th>เข้า</th><th>ออก</th><th>ชั่วโมง</th><th>สถานะ</th></tr></thead>
 <tbody id="history"></tbody></table></div></section>
-</div>
 
-<details id="hrPanel" class="card hr-panel" hidden>
-<summary>ตรวจสอบการลงเวลา — HR</summary>
+<section id="hrPanel" class="card hr-panel" role="tabpanel" aria-labelledby="tabHr" tabindex="0" hidden>
+<div class="hr-heading"><h2>ตรวจสอบการลงเวลา</h2><span class="chip">สำหรับ HR</span></div>
 <p class="hr-caption">ตรวจสอบข้อมูลพนักงานที่มีการลงเวลาในวันที่เลือก เวลาอ้างอิงประเทศไทย</p>
 <form id="hrForm" class="hr-controls">
 <label for="hrDate">วันที่ตรวจสอบ<input id="hrDate" type="date" required></label>
@@ -125,7 +141,8 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 <div class="scroll"><table class="hr-table" aria-label="รายการลงเวลาพนักงานรายวัน">
 <thead><tr><th scope="col">รหัส</th><th scope="col">พนักงาน / แผนก</th><th scope="col">เข้า</th><th scope="col">ออก</th><th scope="col">ชั่วโมง</th><th scope="col">สถานะ</th><th scope="col">รายละเอียด</th></tr></thead>
 <tbody id="hrRecords"></tbody></table></div>
-</details>
+</section>
+</div>
 <footer>เวลาอ้างอิงจากเซิร์ฟเวอร์ (Asia/Bangkok) ไม่ใช่นาฬิกาของอุปกรณ์</footer>
 </main>
 <script src="config.js"></script>
@@ -150,14 +167,26 @@ class ApiError extends Error{constructor(code,msg){super(msg);this.code=code}}
 async function api(action,extra){
   const idToken=liff.getIDToken();
   if(!idToken)throw new ApiError('AUTH','ไม่พบการเข้าสู่ระบบ LINE');
-  let res;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
   try{
     // text/plain keeps this a "simple" request: Apps Script cannot answer a CORS preflight.
-    res=await fetch(CFG.API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({idToken,action},extra))});
-  }catch(e){throw new ApiError('NETWORK','เชื่อมต่อไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต')}
-  let out;try{out=await res.json()}catch(e){throw new ApiError('NETWORK','เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง')}
-  if(!out.ok)throw new ApiError(out.code,out.error);
-  return out.data}
+    const res=await fetch(CFG.API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      signal:controller.signal,body:JSON.stringify(Object.assign({idToken,action},extra))});
+    let out;try{out=await res.json()}catch(e){if(controller.signal.aborted)throw e;throw new ApiError('NETWORK','เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง')}
+    if(!out.ok)throw new ApiError(out.code,out.error);
+    return out.data;
+  }catch(e){
+    if(controller.signal.aborted)throw new ApiError('TIMEOUT',action==='punch'||action==='clock'?
+      'รอผลบันทึกเกิน 30 วินาที รายการอาจบันทึกแล้ว กรุณารีเฟรชตรวจประวัติก่อนกดลงเวลาอีกครั้ง':
+      'โหลดข้อมูลเกิน 30 วินาที กรุณาลองใหม่ หากยังไม่สำเร็จให้ผู้ดูแลตรวจ Apps Script → Executions');
+    if(e instanceof ApiError)throw e;
+    throw new ApiError('NETWORK','เชื่อมต่อไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต');
+  }finally{clearTimeout(timer)}}
+
+function initLiff(){return new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(new ApiError('TIMEOUT','เปิด LINE LIFF เกิน 20 วินาที กรุณาปิดแล้วเปิดแอปใหม่')),20000);
+  Promise.resolve().then(()=>liff.init({liffId:CFG.LIFF_ID})).then(resolve,reject).finally(()=>clearTimeout(timer));
+})}
 
 function handleAuth(e){
   // Expired / invalid ID token: log in again to get a fresh one.
@@ -171,7 +200,7 @@ function bootError(msg){show('boot');$('bootSpin').hidden=true;$('bootMsg').text
 $('bootRetry').onclick=()=>location.reload();
 async function boot(){
   if(!CFG.LIFF_ID||CFG.LIFF_ID.startsWith('YOUR-')||!CFG.API_URL||CFG.API_URL.includes('YOUR-')){bootError('ระบบยังตั้งค่าไม่ครบ (LIFF_ID / API_URL ใน config.js) กรุณาติดต่อผู้ดูแล');return}
-  try{await liff.init({liffId:CFG.LIFF_ID})}catch(e){bootError('เปิด LINE LIFF ไม่สำเร็จ: '+(e.message||e));return}
+  try{await initLiff()}catch(e){bootError('เปิด LINE LIFF ไม่สำเร็จ: '+(e.message||e));return}
   if(!liff.isLoggedIn()){liff.login({redirectUri:location.href});return}
   $('bootMsg').textContent='กำลังโหลดข้อมูล…';
   try{render(await api('dashboard'))}
@@ -274,29 +303,47 @@ function render(data,msg){show('main');model=data;busy=false;lastLoad=Date.now()
   $('today').textContent=fmtLong.format(dateOf(data.today));
   $('clockIn').textContent=timeOnly(data.clockIn);$('clockOut').textContent=timeOnly(data.clockOut);
   $('status').textContent=LABELS[data.status]||data.status;$('status').className='pill '+data.status;
-  renderHistory(data.history);renderLoc(data);syncHere(data);syncHrAccess(data);tick();
+  renderHistory(data.history);renderLoc(data);syncHrAccess(data);tick();
   if(msg)notice('good',msg);else clearNotice();
   updateButton()}
 
 
 /* ---------- HR daily review ---------- */
-let hrSequence=0,hrBusy=false,hrLoadedDate=null;
+let hrSequence=0,hrBusy=false,hrLoadedDate=null,activeTab='attendance';
+const appTabs={attendance:{button:'tabAttendance',panel:'attendancePanel'},history:{button:'tabHistory',panel:'historyPanel'},hr:{button:'tabHr',panel:'hrPanel'}};
 function requestHr(date){return api('hrAttendance',{date})}
-function syncHrAccess(data){const panel=$('hrPanel');panel.hidden=data.user.isHr!==true;
-  if(panel.hidden){hrSequence++;hrBusy=false;hrLoadedDate=null;$('hrRecords').replaceChildren();$('hrStatus').textContent='';panel.open=false;return}
+function selectTab(name){if(!model)return;
+  activeTab=appTabs[name]&&(name!=='hr'||model.user.isHr===true)?name:'attendance';
+  for(const [key,tab] of Object.entries(appTabs)){const selected=key===activeTab;
+    $(tab.button).setAttribute('aria-selected',String(selected));$(tab.button).tabIndex=selected?0:-1;$(tab.panel).hidden=!selected}
+  document.querySelector('main.app').classList.toggle('hr-review',activeTab==='hr');
+  if(activeTab==='attendance')syncHere(model);
+  if(activeTab==='hr'&&hrLoadedDate!==$('hrDate').value&&!hrBusy)loadHr()}
+for(const [key,tab] of Object.entries(appTabs)){
+  $(tab.button).onclick=()=>selectTab(key);
+  $(tab.button).onkeydown=event=>{
+    const visible=Object.values(appTabs).map(tab=>$(tab.button)).filter(button=>!button.hidden);
+    const index=visible.indexOf(event.currentTarget);let target;
+    if(event.key==='ArrowRight')target=visible[(index+1)%visible.length];
+    if(event.key==='ArrowLeft')target=visible[(index+visible.length-1)%visible.length];
+    if(event.key==='Home')target=visible[0];if(event.key==='End')target=visible[visible.length-1];
+    if(target){event.preventDefault();target.click();target.focus()}
+  }
+}
+function syncHrAccess(data){$('appTabs').hidden=false;$('tabHr').hidden=data.user.isHr!==true;
+  if(data.user.isHr!==true){hrSequence++;hrBusy=false;hrLoadedDate=null;$('hrRecords').replaceChildren();$('hrStatus').textContent=''}
   $('hrDate').max=data.today;if(!$('hrDate').value||$('hrDate').value>data.today)$('hrDate').value=data.today;
-  updateHrControls();if(panel.open&&hrLoadedDate===null)loadHr()}
+  updateHrControls();selectTab(activeTab)}
 function updateHrControls(){for(const id of ['hrPrevious','hrToday','hrRefresh'])$(id).disabled=hrBusy;
   $('hrNext').disabled=hrBusy||!model||$('hrDate').value>=model.today;$('hrPanel').setAttribute('aria-busy',String(hrBusy))}
 function shiftHrDay(delta){const date=new Date($('hrDate').value+'T12:00:00+07:00');if(isNaN(date))return;
   date.setTime(date.getTime()+delta*864e5);const parts=new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);
   const part=type=>parts.find(p=>p.type===type).value;const key=part('year')+'-'+part('month')+'-'+part('day');
   if(key>model.today)return;$('hrDate').value=key;loadHr()}
-$('hrPanel').ontoggle=()=>{if($('hrPanel').open&&hrLoadedDate!==$('hrDate').value)loadHr()};
 $('hrForm').onsubmit=event=>{event.preventDefault();loadHr()};
 $('hrDate').onchange=()=>loadHr();$('hrPrevious').onclick=()=>shiftHrDay(-1);$('hrNext').onclick=()=>shiftHrDay(1);
 $('hrToday').onclick=()=>{$('hrDate').value=model.today;loadHr()};
-async function loadHr(){if(!model||model.user.isHr!==true)return;
+async function loadHr(){if(!model||model.user.isHr!==true||activeTab!=='hr')return;
   const date=$('hrDate').value;if(!date||!$('hrDate').checkValidity()){$('hrDate').reportValidity();return}
   const sequence=++hrSequence;hrBusy=true;hrLoadedDate=null;updateHrControls();$('hrRecords').replaceChildren();$('hrStatus').textContent='กำลังโหลดข้อมูล…';
   try{const report=await requestHr(date);if(sequence!==hrSequence||model.user.isHr!==true)return;
