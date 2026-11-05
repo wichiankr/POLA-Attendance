@@ -1,4 +1,0 @@
-google-api-python-client==2.184.0
-google-auth==2.41.1
-paramiko==4.0.0
-tzdata==2025.2

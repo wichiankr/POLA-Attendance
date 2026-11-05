@@ -1,8 +1,0 @@
-{
-  "host": "replace-with-host-from-existing-SFTPupload-config",
-  "port": 8022,
-  "username": "replace-with-existing-username",
-  "password": "replace-with-existing-password",
-  "destination": "POLA/Inbound/TM",
-  "host_key_policy": "tofu"
-}
