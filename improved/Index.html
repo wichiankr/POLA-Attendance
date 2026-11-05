@@ -35,6 +35,20 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 .privacy{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
 .scroll{overflow-x:auto}footer{text-align:center;font-size:12px;color:var(--muted);margin-top:18px}
 @media (max-width:420px){.clock{font-size:42px}.times{grid-template-columns:1fr 1fr}.times .dur{grid-column:span 2}th:nth-child(4),td:nth-child(4){display:none}}
+
+/* HR daily review */
+.hr-panel>summary{cursor:pointer;font-weight:750;color:var(--brand);padding:2px 0}
+.hr-caption{margin:12px 0;color:var(--muted);font-size:13px;line-height:1.6}
+.hr-controls{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:14px 0}
+.hr-controls label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;margin:0;flex:1;min-width:155px}
+.hr-controls input{width:100%;font:inherit;padding:9px;border:1px solid var(--line);border-radius:9px;background:var(--soft);color:var(--ink);margin:0;min-height:42px}
+.hr-controls button{padding:10px 12px;min-height:42px;background:var(--brand-soft);color:var(--brand);font-weight:700}
+.hr-controls button:disabled{opacity:.45;cursor:not-allowed}
+.hr-controls :focus-visible,.hr-panel summary:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.hr-table{min-width:720px}.hr-table th,.hr-table td{vertical-align:top}.hr-table th:nth-child(4),.hr-table td:nth-child(4){display:table-cell}
+.hr-table .hr-name{min-width:140px}.hr-table details{max-width:260px;font-size:13px}.hr-table summary{cursor:pointer;color:var(--brand);white-space:nowrap}
+.hr-punch{padding:6px 0;white-space:normal;line-height:1.5}.hr-punch a{color:var(--brand)}
+@media(min-width:800px){.app:has(.hr-panel[open]){max-width:1000px}}
 </style></head><body><main class="app">
 <header><div><div class="brand">POLA THAILAND</div><h1 id="greet">WFH Attendance</h1>
 <div class="chips" id="identity"><span class="chip skeleton"></span></div></div></header>
@@ -59,6 +73,22 @@ th,td{padding:11px 6px;border-bottom:1px solid var(--line)}td{font-variant-numer
 <section class="card" aria-labelledby="histTitle"><b id="histTitle">ประวัติ 10 รายการล่าสุด</b>
 <div class="scroll"><table><thead><tr><th>วันที่</th><th>เข้า</th><th>ออก</th><th>ชั่วโมง</th><th>สถานะ</th></tr></thead>
 <tbody id="history"><tr><td colspan="5" class="small">กำลังโหลด…</td></tr></tbody></table></div></section>
+
+<details id="hrPanel" class="card hr-panel" hidden>
+<summary>ตรวจสอบการลงเวลา — HR</summary>
+<p class="hr-caption">ตรวจสอบข้อมูลพนักงานที่มีการลงเวลาในวันที่เลือก เวลาอ้างอิงประเทศไทย</p>
+<form id="hrForm" class="hr-controls">
+<label for="hrDate">วันที่ตรวจสอบ<input id="hrDate" type="date" required></label>
+<button id="hrPrevious" type="button" aria-label="ดูวันก่อนหน้า">←</button>
+<button id="hrNext" type="button" aria-label="ดูวันถัดไป">→</button>
+<button id="hrToday" type="button">วันนี้</button>
+<button id="hrRefresh" type="submit">รีเฟรช</button>
+</form>
+<p id="hrStatus" class="small" role="status" aria-live="polite">เลือกวันที่เพื่อดูข้อมูล</p>
+<div class="scroll"><table class="hr-table" aria-label="รายการลงเวลาพนักงานรายวัน">
+<thead><tr><th scope="col">รหัส</th><th scope="col">พนักงาน / แผนก</th><th scope="col">เข้า</th><th scope="col">ออก</th><th scope="col">ชั่วโมง</th><th scope="col">สถานะ</th><th scope="col">รายละเอียด</th></tr></thead>
+<tbody id="hrRecords"></tbody></table></div>
+</details>
 <footer>เวลาอ้างอิงจากเซิร์ฟเวอร์ (Asia/Bangkok) ไม่ใช่นาฬิกาของอุปกรณ์</footer>
 </main>
 <script>
@@ -156,9 +186,49 @@ function render(data,msg){model=data;busy=false;lastLoad=Date.now();offset=data.
   $('today').textContent=fmtLong.format(dateOf(data.today));
   $('clockIn').textContent=timeOnly(data.clockIn);$('clockOut').textContent=timeOnly(data.clockOut);
   $('status').textContent=LABELS[data.status]||data.status;$('status').className='pill '+data.status;
-  renderHistory(data.history);renderLoc(data);syncHere(data);tick();
+  renderHistory(data.history);renderLoc(data);syncHere(data);syncHrAccess(data);tick();
   if(msg)notice('good',msg);else clearNotice();
   updateButton()}
+
+
+/* ---------- HR daily review ---------- */
+let hrSequence=0,hrBusy=false,hrLoadedDate=null;
+function requestHr(date){return new Promise((resolve,reject)=>google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getHrAttendance(date))}
+function syncHrAccess(data){const panel=$('hrPanel');panel.hidden=data.user.isHr!==true;
+  if(panel.hidden){hrSequence++;hrBusy=false;hrLoadedDate=null;$('hrRecords').replaceChildren();$('hrStatus').textContent='';panel.open=false;return}
+  $('hrDate').max=data.today;if(!$('hrDate').value||$('hrDate').value>data.today)$('hrDate').value=data.today;
+  updateHrControls();if(panel.open&&hrLoadedDate===null)loadHr()}
+function updateHrControls(){for(const id of ['hrPrevious','hrToday','hrRefresh'])$(id).disabled=hrBusy;
+  $('hrNext').disabled=hrBusy||!model||$('hrDate').value>=model.today;$('hrPanel').setAttribute('aria-busy',String(hrBusy))}
+function shiftHrDay(delta){const date=new Date($('hrDate').value+'T12:00:00+07:00');if(isNaN(date))return;
+  date.setTime(date.getTime()+delta*864e5);const parts=new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);
+  const part=type=>parts.find(p=>p.type===type).value;const key=part('year')+'-'+part('month')+'-'+part('day');
+  if(key>model.today)return;$('hrDate').value=key;loadHr()}
+$('hrPanel').ontoggle=()=>{if($('hrPanel').open&&hrLoadedDate!==$('hrDate').value)loadHr()};
+$('hrForm').onsubmit=event=>{event.preventDefault();loadHr()};
+$('hrDate').onchange=()=>loadHr();$('hrPrevious').onclick=()=>shiftHrDay(-1);$('hrNext').onclick=()=>shiftHrDay(1);
+$('hrToday').onclick=()=>{$('hrDate').value=model.today;loadHr()};
+async function loadHr(){if(!model||model.user.isHr!==true)return;
+  const date=$('hrDate').value;if(!date||!$('hrDate').checkValidity()){$('hrDate').reportValidity();return}
+  const sequence=++hrSequence;hrBusy=true;hrLoadedDate=null;updateHrControls();$('hrRecords').replaceChildren();$('hrStatus').textContent='กำลังโหลดข้อมูล…';
+  try{const report=await requestHr(date);if(sequence!==hrSequence||model.user.isHr!==true)return;
+    $('hrDate').max=report.today;hrLoadedDate=report.date;renderHrReport(report);
+  }catch(error){if(sequence!==hrSequence)return;if(typeof handleAuth==='function'&&handleAuth(error))return;
+    $('hrStatus').textContent='โหลดข้อมูลไม่สำเร็จ: '+String(error.message||error)+' — กดรีเฟรชเพื่อลองใหม่';
+  }finally{if(sequence===hrSequence){hrBusy=false;updateHrControls()}}}
+function renderHrReport(report){const body=$('hrRecords');body.replaceChildren();
+  $('hrStatus').textContent=fmtLong.format(dateOf(report.date))+' · พนักงาน '+report.employeeCount+' คน · ลงเวลา '+report.punchCount+' ครั้ง';
+  if(!report.rows.length){const row=el('tr'),cell=el('td','ไม่พบการลงเวลาในวันที่เลือก','small');cell.colSpan=7;row.append(cell);body.append(row);return}
+  const statuses={IN:'มีเวลาเข้า',COMPLETED:'มีเวลาเข้า–ออก',MISSED_OUT:'ไม่ได้ลงเวลาออก'};
+  for(const item of report.rows){const row=el('tr'),name=el('td',null,'hr-name');name.append(el('b',item.name),el('div',item.department||'ไม่ระบุแผนก','small'));
+    row.append(el('td',item.employeeId||'—'),name,el('td',timeOnly(item.clockIn)),el('td',timeOnly(item.clockOut)),el('td',item.hours==null?'—':item.hours.toFixed(2)));
+    const status=el('td');status.append(el('span',statuses[item.status]||item.status,'pill '+item.status));row.append(status);
+    const cell=el('td'),details=el('details');details.append(el('summary',item.punchCount+' ครั้ง'));
+    for(const punch of item.punches){const entry=el('div',null,'hr-punch');entry.append(el('b',punch.time.slice(11)));
+      if(punch.location&&punch.location.mapUrl){const link=el('a',punch.location.place||punch.location.latLng);link.href=punch.location.mapUrl;link.target='_blank';link.rel='noopener noreferrer';entry.append(el('br'),link)}
+      else entry.append(el('div','ไม่มีข้อมูลตำแหน่ง','small'));details.append(entry)}
+    cell.append(details);row.append(cell);body.append(row)}}
+/* ---------- End HR daily review ---------- */
 
 function renderHistory(list){const tb=$('history');tb.replaceChildren();
   if(!list.length){const tr=el('tr'),td=el('td','ยังไม่มีข้อมูล','small');td.colSpan=5;tr.appendChild(td);tb.appendChild(tr);return}

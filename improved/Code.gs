@@ -179,6 +179,7 @@ function normalizeRow_(r) {
   const empId = empIdOf_(cell(r[L.EMP_ID]));
   return {
     email: cell(r[L.EMAIL]).toLowerCase(),
+    name: cell(r[L.NAME]), department: cell(r[L.DEPT]),
     date: cell(r[L.DATE], 'yyyy-MM-dd'),
     clockIn: cell(r[L.IN], 'yyyy-MM-dd HH:mm:ss'),
     clockOut: cell(r[L.OUT], 'yyyy-MM-dd HH:mm:ss'),
@@ -209,7 +210,8 @@ function punchSheet_(ss) {
 function punchOf_(who, time, loc, acc, place) {
   const d = parseTime_(time);
   // Calendar day of the punch itself (00:00–23:59 Bangkok), not the old WorkDate column.
-  return {email:who.email, empId:who.empId, time:time, date:time.slice(0, 10), epoch:d ? d.getTime() : 0,
+  return {email:who.email, empId:who.empId, name:who.name || '', department:who.department || '',
+    time:time, date:time.slice(0, 10), epoch:d ? d.getTime() : 0,
     loc:loc, acc:acc, place:place};
 }
 
@@ -230,7 +232,8 @@ function allPunches_(ss) {
   const ps = ss.getSheetByName(SHEET_PUNCH);
   if (ps && ps.getLastRow() > 1) {
     ps.getRange(2, 1, ps.getLastRow() - 1, HEAD_PUNCH.length).getValues().forEach(r => {
-      const who = {email:cell_(r[P.EMAIL]).toLowerCase(), empId:empIdOf_(cell_(r[P.EMP_ID]))};
+      const who = {email:cell_(r[P.EMAIL]).toLowerCase(), empId:empIdOf_(cell_(r[P.EMP_ID])),
+        name:cell_(r[P.NAME]), department:cell_(r[P.DEPT])};
       out.push(punchOf_(who, cell_(r[P.TIME], 'yyyy-MM-dd HH:mm:ss'), cell_(r[P.LOC]), cell_(r[P.ACC]), cell_(r[P.PLACE])));
     });
   }
@@ -263,7 +266,8 @@ function dashboard_(ss, user, now) {
   const view = p => p ? locationView_(p.loc, p.acc, p.place) : null;
   return {
     // Only what the page needs: never send the sheet row or LINE user ID back to the client.
-    user: {email:user.email, name:user.name, department:user.department, employeeId:user.employeeId},
+    user: {email:user.email, name:user.name, department:user.department, employeeId:user.employeeId,
+      isHr:isHr_(user)},
     today: today,
     serverEpoch: now.getTime(),
     status: status,
@@ -287,6 +291,73 @@ function dashboard_(ss, user, now) {
         status:s.last ? 'COMPLETED' : date === today ? 'IN' : 'MISSED_OUT'};
     })
   };
+}
+
+/** HR access is an explicit server-side allowlist, never a role supplied by the page. */
+function isHr_(user) {
+  const configured = PropertiesService.getScriptProperties().getProperty('HR_EMAILS') || '';
+  return configured.split(/[,;\s]+/).map(email => email.trim().toLowerCase())
+    .filter(Boolean).indexOf(String(user.email || '').trim().toLowerCase()) !== -1;
+}
+
+function hrAttendance_(ss, user, requestedDate, now) {
+  // Authorize before reading any other employee's records or validating request details.
+  if (!isHr_(user)) throw fail_('FORBIDDEN', 'คุณไม่มีสิทธิ์ตรวจสอบข้อมูลพนักงาน');
+  const today = dateKey_(now);
+  const selected = requestedDate == null || requestedDate === '' ? today : requestedDate;
+  if (typeof selected !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(selected) ||
+      isNaN(new Date(selected + 'T00:00:00' + TZ_OFFSET).getTime()) ||
+      dateKey_(new Date(selected + 'T00:00:00' + TZ_OFFSET)) !== selected || selected > today) {
+    throw fail_('INPUT', 'กรุณาเลือกวันที่ที่ถูกต้อง ไม่เกินวันปัจจุบัน');
+  }
+  const groups = {};
+  allPunches_(ss).filter(p => p.date === selected && p.epoch <= now.getTime()).forEach(p => {
+    const key = p.empId ? 'id:' + p.empId : 'email:' + p.email;
+    (groups[key] = groups[key] || []).push(p);
+  });
+  // Legacy rows without an ID can be matched to today's employee roster, including inactive staff.
+  const roster = ss.getSheetByName(SHEET_EMP).getDataRange().getDisplayValues().slice(1);
+  const byEmail = {}, byId = {};
+  roster.forEach(r => {
+    const email = String(r[E.EMAIL] || '').trim().toLowerCase();
+    const id = empIdOf_(String(r[E.EMP_ID] || '').trim());
+    const employee = {email:email, employeeId:id, name:String(r[E.NAME] || '').trim(),
+      department:String(r[E.DEPT] || '').trim()};
+    if (email) (byEmail[email] = byEmail[email] || []).push(employee);
+    if (id) (byId[id] = byId[id] || []).push(employee);
+  });
+  Object.keys(groups).filter(key => key.indexOf('email:') === 0).forEach(key => {
+    const matches = byEmail[key.slice(6)] || [];
+    if (matches.length === 1 && EMP_ID_RE.test(matches[0].employeeId)) {
+      const target = 'id:' + matches[0].employeeId;
+      groups[target] = (groups[target] || []).concat(groups[key]);
+      delete groups[key];
+    }
+  });
+  const rows = Object.keys(groups).map(key => {
+    const punches = groups[key].sort((a, b) => a.epoch - b.epoch);
+    const first = punches[0];
+    const matches = key.indexOf('id:') === 0 ? byId[key.slice(3)] || [] : byEmail[first.email] || [];
+    const employee = matches.length === 1 ? matches[0] : null;
+    // The same event can appear in both the legacy and punch sheets during migration.
+    const unique = punches.filter((p, i) => i === 0 || p.epoch !== punches[i - 1].epoch);
+    const sum = daySummary_(unique);
+    return {employeeId:key.indexOf('id:') === 0 ? key.slice(3) : '',
+      name:employee && employee.name || first.name || first.email || 'ไม่ระบุชื่อ',
+      department:employee && employee.department || first.department || '',
+      clockIn:sum.first.time, clockOut:sum.last ? sum.last.time : '',
+      hours:sum.last ? Math.round(sum.workedMs / 36e3) / 100 : null,
+      status:sum.last ? 'COMPLETED' : selected === today ? 'IN' : 'MISSED_OUT',
+      punchCount:unique.length,
+      punches:unique.map(p => ({time:p.time, location:locationView_(p.loc, p.acc, p.place)}))};
+  }).sort((a, b) => a.employeeId.localeCompare(b.employeeId) || a.name.localeCompare(b.name));
+  return {date:selected, today:today, employeeCount:rows.length,
+    punchCount:rows.reduce((total, row) => total + row.punchCount, 0), rows:rows};
+}
+
+function getHrAttendance(date) {
+  const ss = getDb_();
+  return hrAttendance_(ss, employee_(ss), date, new Date());
 }
 
 function lock_() {
@@ -405,6 +476,7 @@ function doPost(e) {
     let data;
     switch (req.action) {
       case 'dashboard': data = dashboard_(ss, employeeByLine_(ss, lineUserId), new Date()); break;
+      case 'hrAttendance': data = hrAttendance_(ss, employeeByLine_(ss, lineUserId), req.date, new Date()); break;
       case 'punch':
       case 'clock': // v1.x LIFF pages still cached on phones
         data = punchFor_(ss, employeeByLine_(ss, lineUserId), req.location, 'LINE'); break;

@@ -123,5 +123,30 @@ LINE app ─► LIFF (GitHub Pages: docs/index.html)
 - **ห้ามแชร์ Spreadsheet ให้พนักงาน:** Apps Script ทำงานด้วยสิทธิ์เจ้าของอยู่แล้ว
 - `setup()`, `installReminder()` และ `remindClockOut()` รันได้เฉพาะเจ้าของหรือ trigger ของระบบเท่านั้น
 
+## หน้าตรวจสอบรายวันสำหรับ HR
+
+- HR เปิดแผง **ตรวจสอบการลงเวลา — HR** ในแอปเดิมได้ ทั้ง LINE LIFF และ Google web app
+- ค่าเริ่มต้นคือวันที่ปัจจุบันตาม Asia/Bangkok เลือกวันที่ย้อนหลัง ปุ่มวันก่อนหน้า/วันถัดไป วันนี้ และรีเฟรชได้ ไม่รับวันที่อนาคต
+- แสดงเฉพาะพนักงานที่มีรายการลงเวลาในวันที่เลือก พร้อมรหัส ชื่อ แผนก เวลาเข้าแรกสุด ออกล่าสุด ชั่วโมง สถานะ และรายละเอียดทุก punch รวมลิงก์ตำแหน่งเมื่อมีข้อมูล ไม่ถือว่าผู้ไม่มีรายการลงเวลาเป็นผู้ขาดงาน
+- รวม Punches และ Attendance เก่า จัดกลุ่มจากวันที่จริงของ timestamp และรวมรายการเดิมที่ซ้ำกันตรงวินาที ไม่แก้ข้อมูลในชีต ประวัติพนักงาน inactive ยังแสดงได้
+- ผู้ดูข้อมูลต้องเป็นพนักงาน Active ที่ยืนยันตัวตนตามเดิม และอีเมลต้องอยู่ใน Script Property **`HR_EMAILS`** เช่น `hr1@company.co.th,hr2@company.co.th` แยกด้วย comma, semicolon หรือขึ้นบรรทัดใหม่ได้
+- ถ้าไม่ได้ตั้ง `HR_EMAILS` จะไม่มีใครมีสิทธิ์ HR ตรวจสิทธิ์ทุกครั้งที่ API ฝั่ง server ไม่เชื่อ role/email จากหน้าเว็บ และไม่ส่งรายชื่อ HR ให้ browser
+
+การอัปเดต: วาง `improved/Code.gs` และ `improved/Index.html` ใน Apps Script ตั้ง `HR_EMAILS` ที่ Project Settings → Script properties แล้ว Deploy → Manage deployments → Edit → New version โดยคง deployment URL เดิม หน้า LINE ต้องเผยแพร่ `docs/index.html` เวอร์ชันใหม่ผ่าน GitHub Pages ด้วย ไม่ต้องเพิ่มคอลัมน์ในชีตหรือรัน setup ใหม่สำหรับฟีเจอร์นี้
+
+รันทดสอบสิทธิ์ HR, API ทั้งสองช่องทาง, รายงานย้อนหลัง, เวลาไทย, ข้อมูลเก่า และ syntax ของหน้าเว็บ:
+
+```bash
+node --test tests/hr-attendance.test.cjs
+```
+
+มี browser smoke test สำหรับการเลือกวัน การแสดงข้อมูลว่าง/ข้อผิดพลาด การป้องกัน response เก่าทับข้อมูลใหม่ และการซ่อนข้อมูลเมื่อสิทธิ์เปลี่ยน ทดสอบทั้ง desktop/mobile ด้วยข้อมูลจำลอง ไม่เชื่อมต่อ API จริง:
+
+```bash
+node --test tests/hr-browser.test.cjs
+```
+
+บน Windows จะหา Chrome/Edge ที่ติดตั้งไว้ให้ บนระบบอื่นตั้ง `BROWSER_BIN` เป็นพาธ Chrome/Chromium ถ้าไม่พบ browser จะข้าม smoke test นี้
+
 ## ทดสอบ
 ทดสอบฝั่ง server ด้วย Node โดยจำลอง Apps Script ไว้ ครอบคลุม: ลงเวลาปกติ, กะข้ามเที่ยงคืน, ลืม Clock Out, แถวข้อมูลเก่า, การตรวจตัวตน, การป้องกัน `setup()`, LIFF API (token, OTP, brute force, rate limit) และการแจ้งเตือน
